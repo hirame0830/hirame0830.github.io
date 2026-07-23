@@ -567,6 +567,7 @@
   let currentPageId = null;
   let zoom = 1;
   let panX = 0, panY = 0;
+  let baseVisW = 0, baseVisH = 0; // on-screen size of the page at zoom=1 (after rotation)
   let fileSeq = 0, pageSeq = 0;
 
   const $ = (id) => document.getElementById(id);
@@ -926,6 +927,9 @@
     pageSurface.style.maxHeight = "none";
     pageSurface.style.width = (natW * scale) + "px";
     pageSurface.style.height = (natH * scale) + "px";
+    baseVisW = swapped ? natH * scale : natW * scale;
+    baseVisH = swapped ? natW * scale : natH * scale;
+    clampPan();
     applyTransform(!!animate);
   }
   window.addEventListener("resize", () => fitPageSurface());
@@ -937,9 +941,14 @@
     zoomPct.textContent = Math.round(zoom * 100) + "%";
   }
   function clampPan() {
-    const maxPan = 260 * (zoom - 1);
-    panX = Math.max(-maxPan, Math.min(maxPan, panX));
-    panY = Math.max(-maxPan, Math.min(maxPan, panY));
+    // Allow panning exactly until the rendered image's edge reaches the
+    // viewport edge — no more, no less — so nothing stays permanently
+    // off-screen and nothing overscrolls past the image bounds.
+    const rect = viewerStage.getBoundingClientRect();
+    const overflowX = Math.max(0, (baseVisW * zoom - rect.width) / 2);
+    const overflowY = Math.max(0, (baseVisH * zoom - rect.height) / 2);
+    panX = Math.max(-overflowX, Math.min(overflowX, panX));
+    panY = Math.max(-overflowY, Math.min(overflowY, panY));
   }
   function setZoom(z, animate) {
     zoom = Math.max(1, Math.min(4.5, z));
