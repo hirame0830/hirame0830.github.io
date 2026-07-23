@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>シフト表リーダー | 画像→CSV</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --paper:#F7F6F2; --card:#FFFFFF; --ink:#22252B; --sub:#6B6E76;
+    --rule:#DCDAD3; --rule-strong:#B9B6AD;
+    --shu:#C2402F; --shu-bg:#FBEBE8;
+    --ai:#2E5A8F; --ai-bg:#EAF0F7;
+    --midori:#3E8E5A; --ki:#F5C63C; --ki-bg:#FBF3D9;
+    --c2:#8A6A52; --c2-bg:#F3EDE7;
+    --err-bg:#FBEBE8; --err-bd:#E4B4AC; --err-tx:#7C2A1F; --ybadge-tx:#8A6D1B;
+    --radius:10px;
+    --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#17181C; --card:#22242B; --ink:#E9E8E3; --sub:#A0A3AB;
+      --rule:#3B3E46; --rule-strong:#525663;
+      --shu:#E06355; --shu-bg:#3B2521;
+      --ai:#85ACDD; --ai-bg:#263140;
+      --midori:#5FB37E; --ki:#D9BC55; --ki-bg:#38321E;
+      --c2:#C9A183; --c2-bg:#322B25;
+      --err-bg:#3B2521; --err-bd:#6B3A31; --err-tx:#F0B4A9; --ybadge-tx:#D9BC55;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic","Meiryo",system-ui,sans-serif;
+    font-size:15px; line-height:1.6; padding:16px 14px 90px;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+
+  /* ── ヘッダー ── */
+  header{margin-bottom:18px}
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.22em;
+    color:var(--sub); text-transform:uppercase; margin-bottom:4px;
+  }
+  h1{font-size:22px; font-weight:800; letter-spacing:.02em}
+  h1 .dot{display:inline-block;width:.62em;height:.62em;border-radius:50%;background:var(--shu);margin:0 .18em 0 .3em}
+  header p{color:var(--sub);font-size:13px;margin-top:4px}
+
+  /* ── 取り込み ── */
+  .drop{
+    background:var(--card); border:2px dashed var(--rule-strong); border-radius:var(--radius);
+    padding:26px 18px; text-align:center; cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  .drop.over{border-color:var(--ai); background:var(--ai-bg)}
+  .drop strong{display:block;font-size:16px;margin-bottom:4px}
+  .drop span{color:var(--sub);font-size:13px}
+  .drop input{display:none}
+
+  .legend{
+    display:flex;flex-wrap:wrap;gap:10px 18px;margin:16px 2px 0;clear:both;
+    font-size:12.5px;color:var(--sub);
+  }
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:baseline}
+
+  /* ── セクション ── */
+  section{margin-top:22px; display:none}
+  section.show{display:block}
+  .sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+  .sec-head h2{font-size:15px;font-weight:800}
+  .sec-head .num{font-family:var(--mono);font-size:11px;color:var(--shu);letter-spacing:.1em}
+  .sec-head .hint{font-size:12px;color:var(--sub)}
+
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:14px}
+
+  /* 検出プレビュー */
+  #ovWrap{overflow:auto;border:1px solid var(--rule);border-radius:8px;background:#333}
+  #overlay{display:block;width:100%;height:auto}
+  details summary{cursor:pointer;font-size:13px;color:var(--ai);font-weight:600;user-select:none}
+  details[open] summary{margin-bottom:10px}
+
+  /* ── 検版グリッド ── */
+  .grid-scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:8px;background:var(--card);
+    -webkit-overflow-scrolling:touch}
+  table.sheet{border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  table.sheet th, table.sheet td{border:1px solid var(--rule);text-align:center;padding:0}
+  table.sheet thead th{
+    background:var(--paper);font-weight:600;color:var(--sub);
+    min-width:30px;height:26px;font-size:11px;position:sticky;top:0;
+  }
+  table.sheet thead th.sat{background:var(--ai-bg);color:var(--ai)}
+  table.sheet thead th.sun{background:var(--shu-bg);color:var(--shu)}
+  table.sheet td.name, table.sheet th.name{
+    position:sticky;left:0;background:var(--card);min-width:96px;z-index:2;
+    border-right:2px solid var(--rule-strong);
+  }
+  table.sheet td.name input{
+    width:92px;border:none;background:transparent;font:inherit;text-align:center;padding:4px 2px;color:var(--ink);
+  }
+  table.sheet td.name input:focus{outline:2px solid var(--ai);border-radius:4px}
+  td.cell{width:32px;height:34px;cursor:pointer;position:relative;user-select:none;-webkit-tap-highlight-color:transparent}
+  td.cell.sat{background:var(--ai-bg)} td.cell.sun{background:var(--shu-bg)}
+  td.cell .mk{display:inline-block;width:13px;height:13px;border-radius:50%}
+  td.cell.rest .mk{background:var(--shu)}
+  td.cell.rest.src-B .mk{background:var(--ink)}
+  td.cell.rest.src-G .mk{background:var(--midori)}
+  td.cell.c2{color:var(--c2);font-weight:700;font-size:11px;background:var(--c2-bg)}
+  td.cell.c2.sat{background:var(--c2-bg)} td.cell.c2.sun{background:var(--c2-bg)}
+  td.cell.ylw::after{
+    content:"";position:absolute;top:2px;right:2px;width:0;height:0;
+    border-top:8px solid var(--ki);border-left:8px solid transparent;
+  }
+  td.total{font-weight:700;min-width:52px;padding:0 6px;white-space:nowrap}
+  td.total .w{color:var(--ink)} td.total .r{color:var(--shu)}
+  table.sheet td.name .nameInp{
+    width:92px;border:none;background:transparent;font:inherit;font-size:12px;
+    text-align:center;padding:2px;color:var(--ink);
+  }
+  table.sheet td.name .nameInp:focus{outline:2px solid var(--ai);border-radius:4px}
+
+  /* 集計表 */
+  table.sum{width:100%;max-width:520px}
+  table.sum td.sv{padding:6px 10px;min-width:52px;font-size:13px}
+  table.sum td.name{padding:6px 10px;text-align:left;font-family:inherit;font-size:13px}
+  table.sum tr.totrow td{background:var(--paper);border-top:2px solid var(--rule-strong)}
+  .ybadge{
+    display:inline-block;background:var(--ki-bg);border:1px solid var(--ki);
+    border-radius:6px;padding:1px 8px;font-weight:700;color:var(--ybadge-tx);
+  }
+  td.verify{padding:2px}
+  td.verify canvas{display:block;height:26px;width:auto;border-radius:3px}
+  td.rowtool{padding:0 4px}
+  td.rowtool button{
+    border:1px solid var(--rule);background:var(--paper);border-radius:6px;
+    font-size:11px;padding:3px 7px;cursor:pointer;color:var(--sub);
+  }
+  tr.excluded td{opacity:.32}
+  tr.excluded td.rowtool{opacity:1}
+
+  .grid-note{font-size:12px;color:var(--sub);margin-top:8px}
+  .grid-note b{color:var(--ink)}
+
+  /* ── オプション・出力 ── */
+  .opts{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;font-size:13px;margin-bottom:12px}
+  .opts label{display:flex;align-items:center;gap:6px;cursor:pointer}
+  .opts input[type=checkbox]{width:16px;height:16px;accent-color:var(--ai)}
+  .opts select,.opts input[type=number]{
+    font:inherit;padding:4px 8px;border:1px solid var(--rule);border-radius:6px;background:var(--card);
+  }
+
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap}
+  button.act{
+    font:inherit;font-weight:700;font-size:14px;padding:11px 20px;border-radius:8px;cursor:pointer;
+    border:1px solid transparent;transition:transform .05s;
+  }
+  button.act:active{transform:translateY(1px)}
+  .act.primary{background:var(--ink);color:var(--paper)}
+  .act.ghost{background:var(--card);color:var(--ink);border-color:var(--rule-strong)}
+
+  pre#csvPrev{
+    margin-top:12px;background:var(--paper);border:1px solid var(--rule);border-radius:8px;
+    padding:12px;font-family:var(--mono);font-size:11.5px;overflow:auto;max-height:220px;white-space:pre;
+  }
+
+  /* 詳細設定 */
+  .adv{margin-top:12px}
+  .adv .row{display:flex;align-items:center;gap:10px;font-size:13px;margin-top:8px;flex-wrap:wrap}
+  .adv input[type=range]{flex:1;min-width:140px;accent-color:var(--ai)}
+  .adv .val{font-family:var(--mono);font-size:12px;min-width:44px;text-align:right}
+
+  .toast{
+    position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(80px);
+    background:var(--ink);color:var(--paper);padding:10px 20px;border-radius:99px;font-size:13px;
+    transition:transform .25s;z-index:50;pointer-events:none;
+  }
+  .toast.show{transform:translateX(-50%) translateY(0)}
+
+  .err{background:var(--err-bg);border:1px solid var(--err-bd);color:var(--err-tx);border-radius:8px;
+    padding:12px 14px;font-size:13.5px;margin-top:14px;display:none}
+  .err.show{display:block}
+
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+  @media (max-width:520px){
+    body{padding:12px 8px 90px}
+    td.cell{width:28px;height:32px}
+    table.sheet td.name,table.sheet th.name{min-width:78px}
+    table.sheet td.name input{width:74px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">SHIFT SHEET READER</div>
+  <h1>シフト表リーダー<span class="dot"></span>画像→CSV</h1>
+  <p>スクリーンショットから罫線グリッドを検出し、丸印の色をピクセル判定で読み取ります。文字認識（OCR）は使いません。</p>
+</header>
+
+<label class="drop" id="drop" style="display:block;text-align:center">
+  <input type="file" id="file" accept="image/*" hidden style="display:none">
+  <strong style="display:block;color:inherit">シフト表の画像を選択</strong>
+  <span>タップして選択 ／ ドラッグ&ドロップ ／ Ctrl+V で貼り付け</span>
+</label>
+
+<div class="legend">
+  <span><i style="background:var(--shu)"></i>赤丸＝休み</span>
+  <span><i style="background:#2B2B2B"></i>黒丸＝休み</span>
+  <span><i style="background:var(--midori)"></i>緑丸＝休み</span>
+  <span style="color:var(--c2);font-weight:700">C2＝出勤扱い（別途表示）</span>
+  <span><i style="background:var(--ki);border-radius:2px"></i>黄色セル＝フラグ表示のみ</span>
+  <span>空白＝出勤</span>
+</div>
+
+<div class="err" id="errBox"></div>
+
+<!-- ① 検出確認 -->
+<section id="secDetect">
+  <div class="sec-head">
+    <span class="num">01</span><h2>グリッド検出</h2>
+    <span class="hint" id="detectInfo"></span>
+  </div>
+  <div class="card">
+    <div class="opts" style="margin-bottom:0">
+      <label>右端の合計列
+        <select id="optTotal">
+          <option value="auto">自動判定</option>
+          <option value="yes">あり（除外する）</option>
+          <option value="no">なし（最後まで日付）</option>
+        </select>
+      </label>
+      <label>左端の日付
+        <input type="number" id="optStartDay" min="1" max="31" value="1" style="width:64px">
+        日から
+      </label>
+    </div>
+    <details style="margin-top:10px">
+      <summary>検出オーバーレイを表示（青＝列 / 朱＝採用した行）</summary>
+      <div id="ovWrap"><canvas id="overlay"></canvas></div>
+    </details>
+    <div class="adv">
+      <details>
+        <summary>検出がずれる場合の詳細設定</summary>
+        <div class="row">罫線のしきい値
+          <input type="range" id="advLine" min="0.25" max="0.8" step="0.05" value="0.5">
+          <span class="val" id="advLineV">0.50</span></div>
+        <div class="row">暗さのしきい値
+          <input type="range" id="advDark" min="80" max="170" step="5" value="120">
+          <span class="val" id="advDarkV">120</span></div>
+        <div class="row"><button class="act ghost" id="reRun" style="padding:7px 14px;font-size:13px">再検出</button></div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ② 検版 -->
+<section id="secGrid">
+  <div class="sec-head">
+    <span class="num">02</span><h2>読み取り結果の検版</h2>
+    <span class="hint">セルをタップで修正：出勤 → 休み → C1 → C2 → 出勤</span>
+  </div>
+  <div class="grid-scroll" id="gridScroll"></div>
+  <p class="grid-note">
+    右端の <b>照合</b> 列は元画像の合計セルの切り抜きです。<b>計算</b> 列（稼働数、C1/C2は0.5換算）と一致するか目視で確認してください。
+    不要な行は「除外」で出力から外せます。
+  </p>
+  <details style="margin-top:10px">
+    <summary style="cursor:pointer;font-size:13px;color:var(--ai);font-weight:600">名前をまとめて貼り付け（1行1名・上の行から順に入ります）</summary>
+    <div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start">
+      <textarea id="bulkNames" rows="4" placeholder="佐藤&#10;鈴木&#10;田中" style="flex:1;min-width:200px;font:inherit;font-size:14px;padding:8px;border:1px solid var(--rule);border-radius:8px"></textarea>
+      <button class="act ghost" id="btnBulkNames" style="padding:9px 16px;font-size:13px">名前を反映</button>
+    </div>
+  </details>
+</section>
+
+<!-- ③ 集計 -->
+<section id="secSum">
+  <div class="sec-head">
+    <span class="num">03</span><h2>スタッフ別集計</h2>
+    <span class="hint">稼働数はC1・C2を0.5日として計算</span>
+  </div>
+  <div class="grid-scroll" id="sumWrap"></div>
+  <div class="btnrow" style="margin-top:10px">
+    <button class="act ghost" id="btnSumDl" style="padding:9px 16px;font-size:13px">集計CSVをダウンロード</button>
+    <button class="act ghost" id="btnSumCopy" style="padding:9px 16px;font-size:13px">集計をコピー</button>
+  </div>
+</section>
+
+<!-- ④ 出力 -->
+<section id="secOut">
+  <div class="sec-head">
+    <span class="num">04</span><h2>CSV出力</h2>
+  </div>
+  <div class="card">
+    <div class="opts">
+      <label>休みの表記
+        <select id="optRest">
+          <option value="休">休</option>
+          <option value="1">1</option>
+          <option value="×">×</option>
+        </select>
+      </label>
+      <label>出勤の表記
+        <select id="optWork">
+          <option value="">（空欄）</option>
+          <option value="出">出</option>
+          <option value="0">0</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="optC2" checked>C1/C2をそのまま出力（外すと出勤扱い）</label>
+      <label><input type="checkbox" id="optSum" checked>集計列（休日数・稼働数・C1・C2・黄色）を付ける</label>
+    </div>
+    <div class="btnrow">
+      <button class="act primary" id="btnDl">CSVをダウンロード</button>
+      <button class="act ghost" id="btnCopy">クリップボードにコピー</button>
+    </div>
+    <pre id="csvPrev"></pre>
+  </div>
+</section>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   解析エンジン（実画像で検証済み・DOM非依存）
+   ============================================================ */
+const ShiftAlgo = (() => {
+
+  function luminance(px, W, H) {
+    const lum = new Uint8Array(W * H);
+    for (let i = 0, p = 0; i < W * H; i++, p += 4)
+      lum[i] = (px[p] * 299 + px[p + 1] * 587 + px[p + 2] * 114) / 1000;
+    return lum;
+  }
+
+  function findTableRegion(lum, W, H) {
+    let y0 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) {
+      let c = 0;
+      for (let x = 0; x < W; x++) if (lum[y * W + x] > 180) c++;
+      if (c / W > 0.5) { if (y0 < 0) y0 = y; y1 = y; }
+    }
+    if (y0 < 0) return null;
+    let x0 = -1, x1 = -1;
+    for (let x = 0; x < W; x++) {
+      let c = 0;
+      for (let y = y0; y <= y1; y++) if (lum[y * W + x] > 180) c++;
+      if (c / (y1 - y0 + 1) > 0.5) { if (x0 < 0) x0 = x; x1 = x; }
+    }
+    if (x0 < 0) return null;
+    return { x0, x1, y0, y1 };
+  }
+
+  function findLines(score, thr) {
+    const idx = [];
+    for (let i = 0; i < score.length; i++) if (score[i] > thr) idx.push(i);
+    if (!idx.length) return [];
+    const out = []; let s = idx[0], p = idx[0];
+    for (let k = 1; k < idx.length; k++) {
+      if (idx[k] - p > 2) { out.push((s + p) >> 1); s = idx[k]; }
+      p = idx[k];
+    }
+    out.push((s + p) >> 1);
+    return out;
+  }
+
+  function dedupe(arr, eps) {
+    const out = [arr[0]];
+    for (let i = 1; i < arr.length; i++) if (arr[i] - out[out.length - 1] > eps) out.push(arr[i]);
+    return out;
+  }
+
+  function detectGrid(lum, W, H, region, opts) {
+    const { x0, x1, y0, y1 } = region;
+    const darkThr = opts.darkThr, lineThr = opts.lineThr;
+    const eps = Math.max(4, Math.round(Math.min(W, H) * 0.004));
+
+    const rowScore = new Float32Array(H);
+    for (let y = y0; y <= y1; y++) {
+      let c = 0;
+      for (let x = x0; x < x1; x++) if (lum[y * W + x] < darkThr) c++;
+      rowScore[y] = c / (x1 - x0);
+    }
+    let hl = findLines(rowScore, lineThr).filter(y => y > y0 && y < y1);
+    hl = dedupe([y0, ...hl, y1], eps);
+
+    const colScore = new Float32Array(W);
+    for (let x = x0; x <= x1; x++) {
+      let c = 0;
+      for (let y = y0; y < y1; y++) if (lum[y * W + x] < darkThr) c++;
+      colScore[x] = c / (y1 - y0);
+    }
+    let vl = findLines(colScore, Math.min(0.9, lineThr + 0.1)).filter(x => x > x0 && x < x1);
+    vl = dedupe([x0, ...vl, x1], eps);
+
+    const gaps = [];
+    for (let i = 1; i < hl.length; i++) gaps.push(hl[i] - hl[i - 1]);
+    const sorted = [...gaps].sort((a, b) => a - b);
+    const upper = sorted.slice(Math.floor(sorted.length / 2));
+    const modal = upper[Math.floor(upper.length / 2)] || 0;
+    const rows = [];
+    for (let i = 1; i < hl.length; i++) {
+      const h = hl[i] - hl[i - 1];
+      if (h >= 0.75 * modal && h <= 1.25 * modal) rows.push([hl[i - 1], hl[i]]);
+    }
+    return { hl, vl, rows, modal };
+  }
+
+  // 赤系文字ピクセルの分布から C1 / C2 を判別
+  // 左のグリフ(C)と右のグリフ(数字)の間の谷で分割し、数字部の幅/高さ比で判定
+  // 「1」は縦棒で細い(比が小さい)、「2」は幅がある
+  function discriminateC(xs, ys) {
+    if (xs.length < 10) return 'C2';
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const w = maxX - minX + 1, h = maxY - minY + 1;
+    if (w < 4 || h < 4) return 'C2';
+    // x方向ヒストグラム
+    const hist = new Array(w).fill(0);
+    for (const x of xs) hist[x - minX]++;
+    // 中央1/3の範囲で最小の列 = グリフ間の谷
+    let valley = Math.floor(w / 2), vmin = Infinity;
+    for (let i = Math.floor(w * 0.3); i <= Math.ceil(w * 0.7); i++) {
+      if (hist[i] < vmin) { vmin = hist[i]; valley = i; }
+    }
+    // 数字部の判定: 「1」は全高に及ぶ縦棒を持つ(peak/h≥0.78)、「2」は曲線で峰が低い
+    // ※幅では判別不可(フォントの「1」はセリフ付きで幅がある)。実画像で検証済み
+    let dMin = w, dMax = -1, peak = 0;
+    for (let i = valley + 1; i < w; i++) if (hist[i] > 0) {
+      if (i < dMin) dMin = i; if (i > dMax) dMax = i;
+      if (hist[i] > peak) peak = hist[i];
+    }
+    if (dMax < 0) return 'C2';
+    const digitW = dMax - dMin + 1;
+    return (peak / h >= 0.78 || digitW / h < 0.35) ? 'C1' : 'C2';
+  }
+
+  function classifyCell(px, W, ya, yb, xa, xb) {
+    const cw = xb - xa, chh = yb - ya;
+    const m = Math.max(3, Math.round(Math.min(cw, chh) * 0.08));
+    const iy0 = ya + m, iy1 = yb - m, ix0 = xa + m, ix1 = xb - m;
+    const leftX1 = ix0 + Math.round((ix1 - ix0) * 0.62); // 右側の▼を除外
+    const area = Math.max(1, (iy1 - iy0) * (leftX1 - ix0));
+
+    let red = 0, grn = 0, blk = 0, yel = 0, full = 0;
+    let rMinX = 1e9, rMaxX = -1, rMinY = 1e9, rMaxY = -1;
+    const redXs = [], redYs = [], trXs = [], trYs = [];
+
+    for (let y = iy0; y < iy1; y++) {
+      for (let x = ix0; x < ix1; x++) {
+        const p = (y * W + x) * 4;
+        const r = px[p], g = px[p + 1], b = px[p + 2];
+        full++;
+        if (r > 200 && g > 170 && b < 140) yel++;
+        if (x >= leftX1) continue;
+        const L = (r * 299 + g * 587 + b * 114) / 1000;
+        if (r > 130 && g < 110 && b < 110) {
+          red++;
+          redXs.push(x); redYs.push(y);
+          if (x < rMinX) rMinX = x; if (x > rMaxX) rMaxX = x;
+          if (y < rMinY) rMinY = y; if (y > rMaxY) rMaxY = y;
+        }
+        if (g > 130 && r < 160 && (g - b) > 40) grn++;
+        if (L < 85 && r < 100) blk++;
+        if ((r - g) >= 14 && (r - b) >= 14 && L < 172 && g >= 60) { trXs.push(x); trYs.push(y); }
+      }
+    }
+
+    const marks = [];
+    if (red / area > 0.01) {
+      const bw = rMaxX - rMinX + 1, bh = rMaxY - rMinY + 1;
+      const fill = red / (bw * bh), ar = bw / bh;
+      marks.push((fill < 0.45 || ar > 1.8) ? discriminateC(redXs, redYs) : 'R');
+    }
+    if (grn / area > 0.01) marks.push('G');
+    if (blk / area > 0.012) marks.push('B');
+    if (!marks.includes('R') && !marks.includes('B') && !marks.includes('C1') && !marks.includes('C2')) {
+      const f = trXs.length / area;
+      if (f > 0.008 && f < 0.26) marks.push(discriminateC(trXs, trYs));
+    }
+    return { marks, yellow: yel / full > 0.25 };
+  }
+
+  // 日付列の連続区間を特定する: 幅が最頻値±30%の最長連続run
+  // 先頭の幅広い列（名前など）と末尾の余分な列を除外する
+  function pickDayRun(vl) {
+    const widths = [];
+    for (let i = 1; i < vl.length; i++) widths.push(vl[i] - vl[i - 1]);
+    const sorted = [...widths].sort((a, b) => a - b);
+    const modalW = sorted[Math.floor(sorted.length / 2)];
+    let best = { start: 0, len: 0 };
+    let s = -1;
+    for (let i = 0; i <= widths.length; i++) {
+      const okW = i < widths.length && widths[i] >= 0.72 * modalW && widths[i] <= 1.35 * modalW;
+      if (okW) { if (s < 0) s = i; }
+      else { if (s >= 0 && i - s > best.len) best = { start: s, len: i - s }; s = -1; }
+    }
+    return best; // widths[best.start .. best.start+best.len-1] が日付列(+合計列)
+  }
+
+  // 右38%ゾーン(▼の位置)に黒い文字ピクセルがあるか
+  // 日付列の▼は灰色/カラーなので黒ゼロ、合計列の数字は黒 → これで見分ける
+  function rightZoneBlackFrac(px, W, ya, yb, xa, xb) {
+    const cw = xb - xa, chh = yb - ya;
+    const m = Math.max(3, Math.round(Math.min(cw, chh) * 0.08));
+    const iy0 = ya + m, iy1 = yb - m, ix0 = xa + m, ix1 = xb - m;
+    const zx0 = ix0 + Math.round((ix1 - ix0) * 0.62);
+    let n = 0, area = 0;
+    for (let y = iy0; y < iy1; y++) {
+      for (let x = zx0; x < ix1; x++) {
+        area++;
+        const p = (y * W + x) * 4;
+        const r = px[p], g = px[p + 1], b = px[p + 2];
+        if ((r * 299 + g * 587 + b * 114) / 1000 < 85 && r < 100) n++;
+      }
+    }
+    return n / Math.max(1, area);
+  }
+
+  function analyze(px, W, H, opts) {
+    const o = Object.assign({ darkThr: 120, lineThr: 0.5, totalMode: 'auto' }, opts);
+    const lum = luminance(px, W, H);
+    const region = findTableRegion(lum, W, H);
+    if (!region) return { error: 'noRegion' };
+    const grid = detectGrid(lum, W, H, region, o);
+    if (grid.rows.length === 0 || grid.vl.length < 4) return { error: 'noGrid', grid, region };
+
+    const run = pickDayRun(grid.vl);
+    if (run.len < 3) return { error: 'noGrid', grid, region };
+    const dayStart = run.start;
+
+    // 末尾列が合計列かどうか
+    let lastIsTotal, totalReason;
+    if (o.totalMode === 'yes') { lastIsTotal = true; totalReason = '手動: あり'; }
+    else if (o.totalMode === 'no') { lastIsTotal = false; totalReason = '手動: なし'; }
+    else {
+      const lastIdx = dayStart + run.len - 1;
+      const hits = grid.rows.filter(([ya, yb]) =>
+        rightZoneBlackFrac(px, W, ya, yb, grid.vl[lastIdx], grid.vl[lastIdx + 1]) > 0.004).length;
+      lastIsTotal = hits >= grid.rows.length * 0.5;
+      totalReason = lastIsTotal ? '自動判定: 末尾は合計列(除外)' : '自動判定: 末尾まで日付列';
+    }
+    const nDays = run.len - (lastIsTotal ? 1 : 0);
+    if (nDays < 1) return { error: 'noGrid', grid, region };
+
+    // 先頭の情報列（名前など）: run手前の列すべて
+    const infoCol = dayStart > 0 ? [grid.vl[0], grid.vl[dayStart]] : null;
+    // 合計列の位置（照合サムネイル用）
+    const totalCol = lastIsTotal
+      ? [grid.vl[dayStart + nDays], grid.vl[dayStart + nDays + 1]]
+      : null;
+
+    const table = grid.rows.map(([ya, yb]) => {
+      const cells = [];
+      for (let d = 0; d < nDays; d++) {
+        const c = classifyCell(px, W, ya, yb, grid.vl[dayStart + d], grid.vl[dayStart + d + 1]);
+        let state = 'work', src = '';
+        if (c.marks.includes('R') || c.marks.includes('B') || c.marks.includes('G')) {
+          state = 'rest';
+          src = c.marks.includes('R') ? 'R' : c.marks.includes('B') ? 'B' : 'G';
+        } else if (c.marks.includes('C1')) state = 'c1';
+        else if (c.marks.includes('C2')) state = 'c2';
+        cells.push({ state, src, yellow: c.yellow });
+      }
+      return { ya, yb, cells, excluded: false, name: '' };
+    });
+    return { region, grid, table, nDays, infoCol, totalCol, totalReason };
+  }
+
+  return { analyze };
+})();
+
+/* ============================================================
+   UI
+   ============================================================ */
+const $ = id => document.getElementById(id);
+let srcCanvas = null;   // 元画像
+let result = null;      // 解析結果
+
+const WEEKDAY = ['日','月','火','水','木','金','土'];
+
+/* ── 画像取り込み ── */
+$('file').addEventListener('change', e => { if (e.target.files[0]) loadImage(e.target.files[0]); });
+const dropEl = $('drop');
+['dragover','dragenter'].forEach(ev => dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.remove('over'); }));
+dropEl.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) loadImage(f);
+});
+document.addEventListener('paste', e => {
+  for (const item of e.clipboardData.items)
+    if (item.type.startsWith('image/')) { loadImage(item.getAsFile()); break; }
+});
+
+async function loadImage(file) {
+  hideError();
+  // HEIC/HEIFはブラウザ単体で開けない場合が多いので先に判定して案内
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    const sig = String.fromCharCode(...head.slice(4, 12));
+    if (sig.startsWith('ftyp') && /hei|hev|mif|avif/.test(sig.slice(4))) {
+      showError('この画像はHEIC/HEIF形式のため読み込めません。スクリーンショット（PNG）を撮り直すか、写真アプリで「JPEGとして保存」してからお試しください。');
+      return;
+    }
+  } catch (e) { /* 判定失敗は無視して読み込みを試す */ }
+
+  const draw = (source, w, h) => {
+    const MAX = 3000; // 大きすぎる画像は縮小（速度対策・精度は十分）
+    let cw = w, chh = h;
+    if (cw > MAX) { chh = Math.round(chh * MAX / cw); cw = MAX; }
+    srcCanvas = document.createElement('canvas');
+    srcCanvas.width = cw; srcCanvas.height = chh;
+    srcCanvas.getContext('2d').drawImage(source, 0, 0, cw, chh);
+    runAnalysis();
+  };
+
+  // ① createImageBitmap（EXIF回転も反映）
+  if (window.createImageBitmap) {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      draw(bmp, bmp.width, bmp.height);
+      bmp.close();
+      return;
+    } catch (e) { /* ②へフォールバック */ }
+  }
+
+  // ② Image + objectURL
+  const tryImage = src => new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = src;
+  });
+  try {
+    const url = URL.createObjectURL(file);
+    const img = await tryImage(url);
+    draw(img, img.naturalWidth, img.naturalHeight);
+    URL.revokeObjectURL(url);
+    return;
+  } catch (e) { /* ③へフォールバック */ }
+
+  // ③ FileReader dataURL（blob:が制限された環境向け）
+  try {
+    const dataUrl = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(file);
+    });
+    const img = await tryImage(dataUrl);
+    draw(img, img.naturalWidth, img.naturalHeight);
+    return;
+  } catch (e) { /* 全滅 */ }
+
+  showError(`画像を読み込めませんでした（${file.name || '名称不明'} / 形式: ${file.type || '不明'} / ${Math.round(file.size / 1024)}KB）。`
+    + 'このHTMLをアプリ内プレビューで開いている場合は、ファイルを一度端末に保存し、SafariやChromeなどのブラウザで直接開いてお試しください。');
+}
+
+/* ── 解析実行 ── */
+$('advLine').addEventListener('input', e => $('advLineV').textContent = Number(e.target.value).toFixed(2));
+$('advDark').addEventListener('input', e => $('advDarkV').textContent = e.target.value);
+$('reRun').addEventListener('click', () => { if (srcCanvas) runAnalysis(); });
+$('optTotal').addEventListener('change', () => { if (srcCanvas) runAnalysis(); });
+$('optStartDay').addEventListener('change', () => {
+  if (!result) return;
+  buildGrid(); buildSummary(); updateCSV();
+});
+function startDay() {
+  const v = parseInt($('optStartDay').value, 10);
+  return (v >= 1 && v <= 31) ? v : 1;
+}
+
+function runAnalysis() {
+  hideError();
+  const W = srcCanvas.width, H = srcCanvas.height;
+  const px = srcCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const res = ShiftAlgo.analyze(px, W, H, {
+    lineThr: Number($('advLine').value),
+    darkThr: Number($('advDark').value),
+    totalMode: $('optTotal').value,
+  });
+  if (res.error) {
+    showError(res.error === 'noRegion'
+      ? '表の領域を検出できませんでした。表全体が明るく写っているスクリーンショットでお試しください。'
+      : '罫線グリッドを検出できませんでした。「詳細設定」でしきい値を下げて再検出してみてください。');
+    ['secDetect','secGrid','secSum','secOut'].forEach(id => $(id).classList.remove('show'));
+    if (res.error === 'noGrid') $('secDetect').classList.add('show');
+    return;
+  }
+  result = res;
+  $('detectInfo').textContent = `${res.table.length}行 × ${res.nDays}日`
+    + (res.infoCol ? '（左端に名前列を検出）' : '') + `／${res.totalReason}`;
+  drawOverlay();
+  buildGrid();
+  buildSummary();
+  updateCSV();
+  ['secDetect','secGrid','secSum','secOut'].forEach(id => $(id).classList.add('show'));
+  $('secGrid').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ── 検出オーバーレイ ── */
+function drawOverlay() {
+  const ov = $('overlay');
+  ov.width = srcCanvas.width; ov.height = srcCanvas.height;
+  const ctx = ov.getContext('2d');
+  ctx.drawImage(srcCanvas, 0, 0);
+  const lw = Math.max(2, srcCanvas.width / 800);
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = 'rgba(46,90,143,.85)';
+  for (const x of result.grid.vl) { ctx.beginPath(); ctx.moveTo(x, result.region.y0); ctx.lineTo(x, result.region.y1); ctx.stroke(); }
+  ctx.strokeStyle = 'rgba(194,64,47,.9)';
+  for (const [ya, yb] of result.grid.rows) {
+    ctx.strokeRect(result.region.x0, ya, result.region.x1 - result.region.x0, yb - ya);
+  }
+}
+
+/* ── 検版グリッド ── */
+function rowStats(row) {
+  let rest = 0, c1 = 0, c2 = 0, ylw = 0;
+  for (const c of row.cells) {
+    if (c.state === 'rest') rest++;
+    else if (c.state === 'c1') c1++;
+    else if (c.state === 'c2') c2++;
+    if (c.yellow) ylw++;
+  }
+  const kadou = (row.cells.length - rest - c1 - c2) + 0.5 * (c1 + c2);
+  return { rest, c1, c2, ylw, kadou };
+}
+const fmt = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
+
+function buildGrid() {
+  const { table, nDays, infoCol, totalCol } = result;
+  const tbl = document.createElement('table');
+  tbl.className = 'sheet';
+
+  // 曜日推定は不可（画像内テキストは読まない）→日付番号のみ
+  const thead = document.createElement('thead');
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<th class="name">名前</th>' +
+    Array.from({ length: nDays }, (_, d) => `<th>${startDay() + d}</th>`).join('') +
+    '<th>計算</th>' + (totalCol ? '<th>照合</th>' : '') + '<th></th>';
+  thead.appendChild(tr);
+  tbl.appendChild(thead);
+
+  const cropCanvas = (x0, x1, ya, yb) => {
+    const c = document.createElement('canvas');
+    c.width = x1 - x0; c.height = yb - ya;
+    c.getContext('2d').drawImage(srcCanvas, x0, ya, x1 - x0, yb - ya, 0, 0, c.width, c.height);
+    return c;
+  };
+
+  const tbody = document.createElement('tbody');
+  table.forEach((row, ri) => {
+    const trr = document.createElement('tr');
+    if (row.excluded) trr.classList.add('excluded');
+
+    const nameTd = document.createElement('td');
+    nameTd.className = 'name';
+    if (infoCol) {
+      // 元画像の名前セルの切り抜きを表示（読み取りはしない）
+      const nc = cropCanvas(infoCol[0], infoCol[1], row.ya, row.yb);
+      nc.style.cssText = 'display:block;width:100%;height:auto;max-height:30px;object-fit:contain;border-radius:3px';
+      nameTd.appendChild(nc);
+    }
+    const inp = document.createElement('input');
+    inp.placeholder = `スタッフ${ri + 1}`;
+    inp.value = row.name;
+    inp.className = 'nameInp';
+    inp.addEventListener('input', () => { row.name = inp.value; buildSummary(); updateCSV(); });
+    nameTd.appendChild(inp);
+    trr.appendChild(nameTd);
+
+    row.cells.forEach((cell, d) => {
+      const td = document.createElement('td');
+      renderCell(td, cell);
+      td.addEventListener('click', () => {
+        cell.state = cell.state === 'work' ? 'rest'
+          : cell.state === 'rest' ? 'c1'
+          : cell.state === 'c1' ? 'c2' : 'work';
+        if (cell.state === 'rest' && !cell.src) cell.src = 'R';
+        renderCell(td, cell);
+        updateRowTotal(trr, row);
+        buildSummary();
+        updateCSV();
+      });
+      trr.appendChild(td);
+    });
+
+    const totalTd = document.createElement('td');
+    totalTd.className = 'total';
+    trr.appendChild(totalTd);
+
+    if (totalCol) {
+      // 元画像の合計セル切り抜き（照合用）
+      const vTd = document.createElement('td');
+      vTd.className = 'verify';
+      vTd.appendChild(cropCanvas(totalCol[0], totalCol[1], row.ya, row.yb));
+      trr.appendChild(vTd);
+    }
+
+    const toolTd = document.createElement('td');
+    toolTd.className = 'rowtool';
+    const exBtn = document.createElement('button');
+    exBtn.textContent = row.excluded ? '戻す' : '除外';
+    exBtn.addEventListener('click', () => {
+      row.excluded = !row.excluded;
+      trr.classList.toggle('excluded', row.excluded);
+      exBtn.textContent = row.excluded ? '戻す' : '除外';
+      buildSummary();
+      updateCSV();
+    });
+    toolTd.appendChild(exBtn);
+    trr.appendChild(toolTd);
+
+    updateRowTotal(trr, row);
+    tbody.appendChild(trr);
+  });
+  tbl.appendChild(tbody);
+
+  const scroll = $('gridScroll');
+  scroll.innerHTML = '';
+  scroll.appendChild(tbl);
+}
+
+/* 名前の一括貼り付け */
+$('btnBulkNames').addEventListener('click', () => {
+  if (!result) return;
+  const names = $('bulkNames').value.split('\n').map(s => s.trim()).filter(Boolean);
+  if (!names.length) return;
+  result.table.forEach((row, i) => { if (i < names.length) row.name = names[i]; });
+  buildGrid();
+  buildSummary();
+  updateCSV();
+  toast(`${Math.min(names.length, result.table.length)}名を反映しました`);
+});
+
+function renderCell(td, cell) {
+  td.className = 'cell';
+  if (cell.yellow) td.classList.add('ylw');
+  td.innerHTML = '';
+  if (cell.state === 'rest') {
+    td.classList.add('rest', 'src-' + (cell.src || 'R'));
+    td.innerHTML = '<span class="mk"></span>';
+  } else if (cell.state === 'c1' || cell.state === 'c2') {
+    td.classList.add('c2');
+    td.textContent = cell.state.toUpperCase();
+  }
+}
+
+function updateRowTotal(trr, row) {
+  const s = rowStats(row);
+  trr.querySelector('.total').innerHTML =
+    `<span class="w">${fmt(s.kadou)}</span> / <span class="r">休${s.rest}</span>`;
+}
+
+/* ── スタッフ別集計 ── */
+function buildSummary() {
+  if (!result) return;
+  const rows = result.table
+    .map((row, ri) => ({ row, ri }))
+    .filter(x => !x.row.excluded);
+  let html = '<table class="sheet sum"><thead><tr>'
+    + '<th class="name">名前</th><th>稼働</th><th>休日</th><th>C1</th><th>C2</th><th>黄色</th>'
+    + '</tr></thead><tbody>';
+  const tot = { kadou: 0, rest: 0, c1: 0, c2: 0, ylw: 0 };
+  for (const { row, ri } of rows) {
+    const s = rowStats(row);
+    tot.kadou += s.kadou; tot.rest += s.rest; tot.c1 += s.c1; tot.c2 += s.c2; tot.ylw += s.ylw;
+    const nm = escapeHtml(row.name || `スタッフ${ri + 1}`);
+    html += `<tr><td class="name">${nm}</td>`
+      + `<td class="sv"><b>${fmt(s.kadou)}</b></td><td class="sv">${s.rest}</td>`
+      + `<td class="sv">${s.c1 || ''}</td><td class="sv">${s.c2 || ''}</td>`
+      + `<td class="sv">${s.ylw ? '<span class="ybadge">' + s.ylw + '</span>' : ''}</td></tr>`;
+  }
+  html += `<tr class="totrow"><td class="name">合計</td>`
+    + `<td class="sv"><b>${fmt(tot.kadou)}</b></td><td class="sv">${tot.rest}</td>`
+    + `<td class="sv">${tot.c1 || ''}</td><td class="sv">${tot.c2 || ''}</td>`
+    + `<td class="sv">${tot.ylw || ''}</td></tr>`;
+  html += '</tbody></table>';
+  $('sumWrap').innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+/* 集計表のCSV */
+function buildSummaryCSV() {
+  if (!result) return '';
+  const lines = ['名前,稼働,休日,C1,C2,黄色'];
+  const tot = { kadou: 0, rest: 0, c1: 0, c2: 0, ylw: 0 };
+  result.table.forEach((row, ri) => {
+    if (row.excluded) return;
+    const s = rowStats(row);
+    tot.kadou += s.kadou; tot.rest += s.rest; tot.c1 += s.c1; tot.c2 += s.c2; tot.ylw += s.ylw;
+    lines.push([row.name || `スタッフ${ri + 1}`, fmt(s.kadou), s.rest, s.c1, s.c2, s.ylw].join(','));
+  });
+  lines.push(['合計', fmt(tot.kadou), tot.rest, tot.c1, tot.c2, tot.ylw].join(','));
+  return lines.join('\r\n');
+}
+
+function downloadCSV(csv, prefix) {
+  if (!csv) return;
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const d = new Date();
+  a.download = `${prefix}_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+$('btnSumDl').addEventListener('click', () => {
+  downloadCSV(buildSummaryCSV(), 'shift_summary');
+  toast('集計CSVをダウンロードしました');
+});
+$('btnSumCopy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(buildSummaryCSV());
+    toast('集計をコピーしました');
+  } catch {
+    toast('コピーできませんでした');
+  }
+});
+
+/* ── CSV ── */
+['optRest','optWork','optC2','optSum'].forEach(id => $(id).addEventListener('change', updateCSV));
+
+function buildCSV() {
+  if (!result) return '';
+  const restS = $('optRest').value;
+  const workS = $('optWork').value;
+  const useC = $('optC2').checked;
+  const withSum = $('optSum').checked;
+  const n = result.nDays;
+
+  const head = ['名前', ...Array.from({ length: n }, (_, i) => String(startDay() + i))];
+  if (withSum) head.push('休日数', '稼働数', 'C1', 'C2', '黄色');
+  const lines = [head.join(',')];
+
+  result.table.forEach((row, ri) => {
+    if (row.excluded) return;
+    const name = row.name || `スタッフ${ri + 1}`;
+    const vals = row.cells.map(c =>
+      c.state === 'rest' ? restS
+      : c.state === 'c1' ? (useC ? 'C1' : workS)
+      : c.state === 'c2' ? (useC ? 'C2' : workS)
+      : workS);
+    const line = [name, ...vals];
+    if (withSum) {
+      const s = rowStats(row);
+      line.push(String(s.rest), fmt(s.kadou), String(s.c1), String(s.c2), String(s.ylw));
+    }
+    lines.push(line.join(','));
+  });
+  return lines.join('\r\n');
+}
+
+function updateCSV() { $('csvPrev').textContent = buildCSV(); }
+
+$('btnDl').addEventListener('click', () => {
+  downloadCSV(buildCSV(), 'shift');
+  toast('CSVをダウンロードしました');
+});
+
+$('btnCopy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(buildCSV());
+    toast('コピーしました');
+  } catch {
+    toast('コピーできませんでした（プレビューから手動選択してください）');
+  }
+});
+
+/* ── 共通 ── */
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function showError(msg) { const e = $('errBox'); e.textContent = msg; e.classList.add('show'); }
+function hideError() { $('errBox').classList.remove('show'); }
+</script>
+</body>
+</html>

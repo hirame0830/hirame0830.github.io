@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>業務アプリ一覧</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root{
+    --paper:#F7F6F2; --card:#FFFFFF; --ink:#22252B; --sub:#6B6E76;
+    --rule:#DCDAD3; --ai:#2E5A8F; --radius:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic","Meiryo",system-ui,sans-serif;
+    padding:32px 16px 60px;
+  }
+  .wrap{max-width:640px;margin:0 auto}
+  h1{font-size:20px;font-weight:800;margin-bottom:6px}
+  p.sub{color:var(--sub);font-size:13px;margin-bottom:28px}
+  ul{list-style:none}
+  li + li{margin-top:10px}
+  a{
+    display:block;
+    background:var(--card);
+    border:1px solid var(--rule);
+    border-radius:var(--radius);
+    padding:14px 18px;
+    text-decoration:none;
+    color:var(--ink);
+    transition:border-color .15s, transform .1s;
+  }
+  a:hover{border-color:var(--ai); transform:translateY(-1px)}
+  a .name{font-weight:600;font-size:15px;display:block}
+  a .desc{color:var(--sub);font-size:12.5px;margin-top:3px;font-weight:400}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>業務アプリ一覧</h1>
+  <p class="sub">すべてブラウザ内で完結し、データは外部に送信されません。</p>
+  <ul>
+    <li><a href="/app/shift-reader/"><span class="name">シフト表リーダー</span><span class="desc">シフト表の画像から丸印を読み取り、CSVに変換<br>※明細作成時に使用</span></a></li>
+    <li><a href="/app/contract-license-ocr/"><span class="name">契約書台帳 OCR抽出</span><span class="desc">契約書・免許証の画像やPDFからテキストを読み取り<br>※精度はそこそこ。申請用</span></a></li>
+    <li><a href="/app/light-viewer/"><span class="name">書類ビューアー</span><span class="desc">PDFなどの書類をブラウザ上で軽量表示<br>※申請の際、PDFと画像をまとめてペラペラめくる用。ふせん機能あり</span></a></li>
+    <li><a href="/app/shift-import/"><span class="name">シフトインポート</span><span class="desc">freeeシフトCSVへの変換ツール</span></a></li>
+    <li><a href="/app/pdf-affiliation-extractor/"><span class="name">PDF テキスト抽出・大分類／所属別整理</span><span class="desc">字の細かいあのPDFを読むやつ。大分類・所属ごとに表を抜き出し<br>※ローカル処理、外部送信なし</span></a></li>
+    <li><a href="/app/local-pdf-tools/"><span class="name">紙処室 — ローカルPDFツール</span><span class="desc">PDFの結合・分割・回転・ページ編成、JPEG⇔PDF変換、OCR（検索可能PDF化）、PDF→Markdown、注釈の書き込みまで1画面で<br>※ローカル処理、外部送信なし（初回OCR時のみ言語データをCDNから取得）</span></a></li>
+    <li><a href="/app/masking-ai/"><span class="name">墨ぬりAI</span><span class="desc">テキスト中の個人情報を検出してマスキング補助<br>※ローカル処理、外部送信なし</span></a></li>
+  </ul>
+</div>
+</body>
+</html>

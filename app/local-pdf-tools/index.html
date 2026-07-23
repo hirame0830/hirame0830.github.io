@@ -1,0 +1,2795 @@
+<!DOCTYPE html>
+<html lang="ja">
+<!--
+  == 開発ロードマップ(Claudeとのチャット引き継ぎ用メモ) ==
+  実装済み: 結合 / 分割 / 回転 / 編成 / JPEG→PDF / PDF→JPEG / OCR PDF(検索可能PDF化) / PDF→Markdown /
+           PDF編集(注釈・テキスト追加)
+           + 全タブ共通の出力ファイル名指定機能(sanitizeFileName/syncAutoFilename)
+           + 結合・分割・回転タブへのページサムネイルプレビュー追加
+             (分割・回転はサムネイルクリック⇔ページ範囲入力欄の双方向同期。回転はCSS transformでの見た目回転プレビューのみ、実PDFの回転は保存時)
+           + JPEG→PDFタブへのサムネイルプレビュー(URL.createObjectURL、外す/クリア時にrevoke)と余白設定(mm指定、pdf-lib描画時にpt換算)を追加
+  未着手: 現在なし。新機能の要望が出たらここに追記してから着手する。
+  メモ(PDF→Markdown): pdf.jsのtextContentをy座標でクラスタリングして行化し、
+    文字数加重の最頻フォントサイズを「本文」とみなして、それより大きい行を見出し(#/##/###)化。
+    行間隔の中央値より大きく空いたら段落区切り。表・段組み・画像は考慮しない簡易版。
+    見出し誤検出はmd-output(textarea)で手直しできる想定。
+  メモ(PDF編集): pdf.jsでページをcanvas描画し、viewport.convertToPdfPoint()/convertToViewportPoint()で
+    クリック位置とPDF座標を相互変換(ページ回転もこれで自動的に吸収される。OCR機能と同じ考え方)。
+    書き出しはpdf-lib + 日本語フォント(NOTO_SANS_JP_URL、キャッシュ変数ocrJapaneseFontBytesをOCR機能と共用)。
+    既存テキストの書き換えは非対応、新規テキストを重ねて描くのみ。1注釈=1テキストボックス、複数行は改行で対応。
+  メモ(ファイル名指定): sanitizeFileName(input, fallback)で不正文字を除去・空ならfallback。
+    syncAutoFilename(inputEl, newAuto, state)は「入力欄が空、または直前の自動生成名のまま」の時だけ
+    新しい自動生成名で上書きする(ユーザーの手入力を壊さないため)。分割・PDF→JPEGは出力形式(.pdf/.zip/.jpg)が
+    モードやページ数で変わるため、拡張子表示(span)も動的に切り替えている。
+  メモ(結合・分割・回転プレビュー): 編成タブのサムネイル生成ロジックをrenderPageThumb()/
+    generateThumbsProgressive()として切り出し、共通利用している。分割・回転のページ選択は
+    formatPageRanges()(選択ページ集合→"1-3, 5"形式の文字列)とparseRanges()(既存、文字列→0-indexed配列)
+    を使って双方向同期している(1-indexed⇔0-indexedの変換に注意)。
+  ルール: 次のチャットではまずこのコメントで実装済み/未着手を確認してから着手する。
+         1機能が完成するたびに、このコメントの「実装済み/未着手」を更新すること。
+-->
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>紙処室 — ローカルPDFツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@0.0.4/dist/fontkit.umd.min.js"></script>
+<style>
+  :root {
+    --paper: #FAFAF6;
+    --card: #FFFFFF;
+    --ink: #22303C;
+    --ink-soft: #5B6B78;
+    --line: #E3E1D8;
+    --indigo: #2B4C7E;
+    --indigo-deep: #1F3A63;
+    --shu: #D0402F; /* 朱色 — ローカル処理の印 */
+    --ok: #2E7D4F;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Zen Kaku Gothic New", sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    line-height: 1.6;
+  }
+  .mono { font-family: "IBM Plex Mono", monospace; }
+
+  /* ---------- ヘッダー ---------- */
+  header {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 40px 20px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .brand h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+  .brand p {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 2px;
+  }
+  /* 朱印バッジ — このページの署名要素 */
+  .stamp {
+    width: 76px; height: 76px;
+    border: 2.5px solid var(--shu);
+    border-radius: 50%;
+    color: var(--shu);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    line-height: 1.4;
+    transform: rotate(-8deg);
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .stamp span { display: block; text-align: center; }
+
+  /* ---------- タブ ---------- */
+  main { max-width: 860px; margin: 0 auto; padding: 0 20px 80px; }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 24px;
+  }
+  .tab {
+    padding: 10px 22px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab.active {
+    color: var(--indigo);
+    border-bottom-color: var(--indigo);
+    font-weight: 700;
+  }
+  .tab:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ---------- ドロップゾーン ---------- */
+  .drop {
+    border: 2px dashed var(--line);
+    border-radius: var(--radius);
+    background: var(--card);
+    padding: 44px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over {
+    border-color: var(--indigo);
+    background: #F3F6FB;
+  }
+  .drop:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+  .drop .big { font-size: 16px; font-weight: 700; }
+  .drop .sub { font-size: 13px; color: var(--ink-soft); margin-top: 4px; }
+  input[type="file"] { display: none; }
+
+  /* ---------- ファイルリスト(結合) ---------- */
+  .file-list { list-style: none; margin-top: 16px; }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin-bottom: 8px;
+  }
+  .file-item .order {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    color: var(--indigo);
+    font-weight: 500;
+    width: 24px;
+    flex-shrink: 0;
+  }
+  .file-item .name {
+    flex: 1;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-item .meta {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+    flex-shrink: 0;
+  }
+  .icon-btn {
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    width: 30px; height: 30px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--ink-soft);
+    flex-shrink: 0;
+  }
+  .icon-btn:hover { border-color: var(--indigo); color: var(--indigo); }
+  .icon-btn.del:hover { border-color: var(--shu); color: var(--shu); }
+  .icon-btn:disabled { opacity: .3; cursor: default; }
+  .icon-btn:disabled:hover { border-color: var(--line); color: var(--ink-soft); }
+
+  /* ---------- ファイル行の小サムネイル(結合・JPEG→PDF) ---------- */
+  .file-thumb {
+    width: 44px;
+    height: 58px;
+    flex-shrink: 0;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--paper);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .file-thumb img {
+    max-width: 100%;
+    max-height: 100%;
+    display: block;
+  }
+  .file-thumb .ph {
+    font-size: 10px;
+    color: var(--ink-soft);
+  }
+
+  /* ---------- 編成(サムネイルグリッド) ---------- */
+  .thumb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 14px;
+    margin-top: 20px;
+  }
+  .thumb-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px;
+    cursor: grab;
+    user-select: none;
+    transition: opacity .15s, box-shadow .15s;
+  }
+  .thumb-card:active { cursor: grabbing; }
+  .thumb-card.dragging { opacity: .35; }
+  .thumb-card.drop-before { box-shadow: inset 3px 0 0 var(--indigo); }
+  .thumb-card.drop-after { box-shadow: inset -3px 0 0 var(--indigo); }
+  .thumb-card .thumb-num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--indigo);
+    font-weight: 500;
+    margin-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thumb-card .thumb-img-wrap {
+    aspect-ratio: 3 / 4;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .thumb-card img {
+    max-width: 92%;
+    max-height: 92%;
+    display: block;
+    transition: transform .15s;
+  }
+  .thumb-card .thumb-tools {
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .thumb-card .thumb-tools .icon-btn { width: 26px; height: 26px; font-size: 12px; }
+
+  /* 分割・回転タブのページ選択プレビュー */
+  .thumb-card.selectable { cursor: pointer; }
+  .thumb-card.selected { border-color: var(--indigo); box-shadow: 0 0 0 2px var(--indigo) inset; }
+  .thumb-card.preview-only { cursor: default; background: #F3F6FB; }
+
+  /* ---------- 分割パネル ---------- */
+  .split-info {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-top: 16px;
+  }
+  .split-info .fname { font-weight: 700; font-size: 15px; word-break: break-all; }
+  .split-info .pages {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    color: var(--indigo);
+    margin-top: 2px;
+  }
+  .mode-group { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .mode {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    cursor: pointer;
+  }
+  .mode input[type="radio"] {
+    display: inline-block;
+    accent-color: var(--indigo);
+    margin-top: 5px;
+  }
+  .mode .label { font-weight: 500; font-size: 14px; }
+  .hint { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+  .range-input {
+    margin-top: 8px;
+    width: 100%;
+    max-width: 340px;
+    padding: 9px 12px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .range-input:focus { outline: 2px solid var(--indigo); border-color: var(--indigo); }
+  .range-input:disabled { opacity: .5; }
+
+  /* ---------- 出力ファイル名指定 ---------- */
+  .filename-field { margin-top: 16px; }
+  .filename-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    margin-bottom: 6px;
+  }
+  .filename-input-row {
+    display: flex;
+    align-items: stretch;
+    max-width: 360px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--paper);
+  }
+  .filename-input-row:focus-within {
+    outline: 2px solid var(--indigo);
+    outline-offset: -1px;
+    border-color: var(--indigo);
+  }
+  .filename-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    padding: 9px 10px;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .filename-input:focus { outline: none; }
+  .filename-ext {
+    padding: 9px 10px;
+    font-size: 13px;
+    color: var(--ink-soft);
+    background: var(--card);
+    border-left: 1px solid var(--line);
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+  }
+
+  /* セグメント切替 */
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex-wrap: wrap; }
+  .seg-btn {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    background: var(--card);
+    color: var(--ink-soft);
+    border: none;
+    border-right: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .seg-btn:last-child { border-right: none; }
+  .seg-btn:hover { background: #F3F6FB; color: var(--ink); }
+  .seg-btn.active { background: var(--indigo); color: #fff; }
+  .seg-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+  /* ---------- PDF→Markdown ---------- */
+  #md-result { margin-top: 20px; }
+  .md-result-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .md-result-actions { display: flex; gap: 8px; }
+  .md-textarea {
+    display: block;
+    width: 100%;
+    min-height: 440px;
+    margin-top: 12px;
+    padding: 16px;
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    resize: vertical;
+    white-space: pre-wrap;
+  }
+  .md-textarea:focus { outline: 2px solid var(--indigo); border-color: var(--indigo); }
+
+  /* ---------- PDF編集(注釈) ---------- */
+  .annot-color-input {
+    margin-top: 8px;
+    width: 48px;
+    height: 32px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 2px;
+    cursor: pointer;
+    background: var(--card);
+  }
+  .annot-canvas-wrap {
+    position: relative;
+    display: inline-block;
+    margin-top: 18px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    max-width: 100%;
+  }
+  #annot-canvas { display: block; }
+  .annot-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    cursor: crosshair;
+  }
+  .annot-box {
+    position: absolute;
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    transform: translateY(-100%);
+  }
+  .annot-handle {
+    cursor: grab;
+    font-size: 12px;
+    color: var(--indigo);
+    background: rgba(255,255,255,.9);
+    border: 1px solid var(--indigo);
+    border-radius: 4px;
+    padding: 0 3px;
+    line-height: 1.5;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .annot-handle:active { cursor: grabbing; }
+  .annot-text {
+    min-width: 24px;
+    max-width: 60vw;
+    outline: 1px dashed var(--indigo);
+    background: rgba(255,255,255,.55);
+    padding: 0 3px;
+    line-height: 1.15;
+    white-space: pre;
+    font-family: "Zen Kaku Gothic New", sans-serif;
+  }
+  .annot-text:focus {
+    outline: 2px solid var(--indigo);
+    background: rgba(255,255,255,.9);
+  }
+  .annot-del {
+    font-family: inherit;
+    cursor: pointer;
+    font-size: 10px;
+    color: var(--shu);
+    background: rgba(255,255,255,.9);
+    border: 1px solid var(--shu);
+    border-radius: 4px;
+    width: 17px; height: 17px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .annot-nav {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+
+  /* ---------- ボタン・状態 ---------- */
+  .actions { margin-top: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .btn {
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    padding: 11px 28px;
+    border-radius: var(--radius);
+    border: none;
+    cursor: pointer;
+    background: var(--indigo);
+    color: #fff;
+    letter-spacing: 0.04em;
+  }
+  .btn:hover { background: var(--indigo-deep); }
+  .btn:disabled { background: #B9C2CC; cursor: default; }
+  .btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .btn-ghost {
+    background: none;
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+    font-weight: 500;
+  }
+  .btn-ghost:hover { background: #F0EFE9; color: var(--ink); }
+  .status { font-size: 13px; min-height: 20px; margin-top: 12px; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--shu); }
+  .status.busy { color: var(--ink-soft); }
+
+  footer {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+  footer .rule { border-top: 1px solid var(--line); padding-top: 16px; }
+
+  @media (max-width: 560px) {
+    header { padding-top: 28px; }
+    .stamp { width: 64px; height: 64px; font-size: 10px; }
+    .file-item .meta { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>紙処室<span style="font-size:14px; font-weight:500; color:var(--ink-soft); margin-left:10px;">— ローカルPDFツール</span></h1>
+    <p>すべての処理はこのブラウザの中だけで完結します。ファイルはどこにも送信されません。</p>
+  </div>
+  <div class="stamp" aria-label="ローカル処理・送信ゼロ">
+    <span>局所</span>
+    <span>処理</span>
+  </div>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button class="tab active" id="tab-merge" role="tab" aria-selected="true" data-panel="panel-merge">結合</button>
+    <button class="tab" id="tab-split" role="tab" aria-selected="false" data-panel="panel-split">分割</button>
+    <button class="tab" id="tab-rotate" role="tab" aria-selected="false" data-panel="panel-rotate">回転</button>
+    <button class="tab" id="tab-organize" role="tab" aria-selected="false" data-panel="panel-organize">編成</button>
+    <button class="tab" id="tab-img2pdf" role="tab" aria-selected="false" data-panel="panel-img2pdf">JPEG→PDF</button>
+    <button class="tab" id="tab-pdf2img" role="tab" aria-selected="false" data-panel="panel-pdf2img">PDF→JPEG</button>
+    <button class="tab" id="tab-ocr" role="tab" aria-selected="false" data-panel="panel-ocr">OCR</button>
+    <button class="tab" id="tab-md" role="tab" aria-selected="false" data-panel="panel-md">PDF→Markdown</button>
+    <button class="tab" id="tab-annotate" role="tab" aria-selected="false" data-panel="panel-annotate">PDF編集</button>
+  </div>
+
+  <!-- ============ 結合 ============ -->
+  <section class="panel active" id="panel-merge" role="tabpanel" aria-labelledby="tab-merge">
+    <div class="drop" id="merge-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">PDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">複数ファイル可 · 上から順に結合されます</div>
+      <input type="file" id="merge-input" accept="application/pdf" multiple>
+    </div>
+
+    <ul class="file-list" id="merge-list"></ul>
+
+    <div class="filename-field" id="merge-filename-field" hidden>
+      <label for="merge-filename">保存ファイル名</label>
+      <div class="filename-input-row">
+        <input type="text" id="merge-filename" class="filename-input mono" placeholder="自動">
+        <span class="filename-ext">.pdf</span>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="merge-btn" disabled>結合してダウンロード</button>
+      <button class="btn btn-ghost" id="merge-clear" disabled>すべて外す</button>
+    </div>
+    <div class="status" id="merge-status" role="status"></div>
+  </section>
+
+  <!-- ============ 分割 ============ -->
+  <section class="panel" id="panel-split" role="tabpanel" aria-labelledby="tab-split">
+    <div class="drop" id="split-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">分割するPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ</div>
+      <input type="file" id="split-input" accept="application/pdf">
+    </div>
+
+    <div class="split-info" id="split-info" hidden>
+      <div class="fname" id="split-fname"></div>
+      <div class="pages" id="split-pages"></div>
+
+      <div class="mode-group">
+        <label class="mode">
+          <input type="radio" name="split-mode" value="range" checked>
+          <div>
+            <div class="label">ページ範囲を抜き出して1つのPDFに</div>
+            <div class="hint">例: <span class="mono">1-3, 5, 8-10</span>(カンマ区切り・ハイフンで範囲)</div>
+            <input class="range-input mono" type="text" id="range-input" placeholder="1-3, 5" inputmode="numeric">
+          </div>
+        </label>
+        <label class="mode">
+          <input type="radio" name="split-mode" value="each">
+          <div>
+            <div class="label">全ページを1ページずつ個別のPDFに</div>
+            <div class="hint">まとめてZIPでダウンロードします</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="hint" id="split-grid-hint" style="margin-top:16px;">サムネイルをクリックすると抜き出すページを選べます。</div>
+      <div class="thumb-grid" id="split-grid"></div>
+
+      <div class="filename-field">
+        <label for="split-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="split-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext" id="split-filename-ext">.pdf</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="split-btn">分割してダウンロード</button>
+        <button class="btn btn-ghost" id="split-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="split-status" role="status"></div>
+    </div>
+  </section>
+
+  <!-- ============ 回転 ============ -->
+  <section class="panel" id="panel-rotate" role="tabpanel" aria-labelledby="tab-rotate">
+    <div class="drop" id="rotate-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">回転するPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ</div>
+      <input type="file" id="rotate-input" accept="application/pdf">
+    </div>
+
+    <div class="split-info" id="rotate-info" hidden>
+      <div class="fname" id="rotate-fname"></div>
+      <div class="pages" id="rotate-pages"></div>
+
+      <div class="mode-group">
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">回転する向き</div>
+          <div class="seg" id="rotate-dir" style="margin-top:8px;">
+            <button class="seg-btn active" data-deg="90">右90°  ↻</button>
+            <button class="seg-btn" data-deg="180">180°</button>
+            <button class="seg-btn" data-deg="270">左90°  ↺</button>
+          </div>
+        </div>
+        <label class="mode" style="margin-top:6px;">
+          <input type="radio" name="rotate-scope" value="all" checked>
+          <div>
+            <div class="label">すべてのページ</div>
+          </div>
+        </label>
+        <label class="mode">
+          <input type="radio" name="rotate-scope" value="range">
+          <div>
+            <div class="label">指定したページだけ</div>
+            <div class="hint">例: <span class="mono">1-3, 5</span></div>
+            <input class="range-input mono" type="text" id="rotate-range" placeholder="1-3, 5" inputmode="numeric" disabled>
+          </div>
+        </label>
+      </div>
+
+      <div class="hint" id="rotate-grid-hint" hidden style="margin-top:16px;">サムネイルをクリックすると回転対象のページを選べます。</div>
+      <div class="thumb-grid" id="rotate-grid"></div>
+
+      <div class="filename-field">
+        <label for="rotate-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="rotate-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext">.pdf</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="rotate-btn">回転してダウンロード</button>
+        <button class="btn btn-ghost" id="rotate-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="rotate-status" role="status"></div>
+    </div>
+  </section>
+
+  <!-- ============ 編成 ============ -->
+  <section class="panel" id="panel-organize" role="tabpanel" aria-labelledby="tab-organize">
+    <div class="drop" id="organize-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">編成するPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ · カードをドラッグして並べ替え、ページ単位で削除・回転できます</div>
+      <input type="file" id="organize-input" accept="application/pdf">
+    </div>
+
+    <div class="status" id="organize-load-status" role="status"></div>
+
+    <div id="organize-info" hidden>
+      <div class="split-info" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div class="fname" id="organize-fname"></div>
+          <div class="pages" id="organize-pages"></div>
+        </div>
+        <div style="font-size:12px; color:var(--ink-soft);">カードをドラッグで並べ替え / ✕で削除 / ↺↻で回転</div>
+      </div>
+
+      <div class="thumb-grid" id="organize-grid"></div>
+
+      <div class="filename-field">
+        <label for="organize-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="organize-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext">.pdf</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="organize-btn" disabled>この順番でダウンロード</button>
+        <button class="btn btn-ghost" id="organize-reset">元の順序に戻す</button>
+        <button class="btn btn-ghost" id="organize-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="organize-status" role="status"></div>
+    </div>
+  </section>
+
+  <!-- ============ JPEG→PDF ============ -->
+  <section class="panel" id="panel-img2pdf" role="tabpanel" aria-labelledby="tab-img2pdf">
+    <div class="drop" id="img2pdf-drop" tabindex="0" role="button" aria-label="画像を選択またはドロップ">
+      <div class="big">画像をここにドロップ、またはクリックして選択</div>
+      <div class="sub">JPEG / PNG 対応 · 複数可 · 上から順に1枚1ページで並びます</div>
+      <input type="file" id="img2pdf-input" accept="image/jpeg,image/png" multiple>
+    </div>
+
+    <ul class="file-list" id="img2pdf-list"></ul>
+
+    <div class="split-info" id="img2pdf-opts" hidden>
+      <div class="label" style="font-size:14px;font-weight:500;">ページの大きさ</div>
+      <div class="seg" id="img2pdf-size" style="margin-top:8px;">
+        <button class="seg-btn active" data-size="fit">画像サイズに合わせる</button>
+        <button class="seg-btn" data-size="a4">A4に収める</button>
+      </div>
+
+      <div class="label" style="font-size:14px;font-weight:500;margin-top:18px;">余白</div>
+      <div class="hint">画像のまわりに余白を入れます(既定は余白なし)</div>
+      <div class="seg" id="img2pdf-margin" style="margin-top:8px;">
+        <button class="seg-btn active" data-mm="0">0mm(なし)</button>
+        <button class="seg-btn" data-mm="5">5mm</button>
+        <button class="seg-btn" data-mm="10">10mm</button>
+        <button class="seg-btn" data-mm="20">20mm</button>
+      </div>
+    </div>
+
+    <div class="filename-field" id="img2pdf-filename-field" hidden>
+      <label for="img2pdf-filename">保存ファイル名</label>
+      <div class="filename-input-row">
+        <input type="text" id="img2pdf-filename" class="filename-input mono" placeholder="自動">
+        <span class="filename-ext">.pdf</span>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="img2pdf-btn" disabled>PDFにしてダウンロード</button>
+      <button class="btn btn-ghost" id="img2pdf-clear" disabled>すべて外す</button>
+    </div>
+    <div class="status" id="img2pdf-status" role="status"></div>
+  </section>
+
+  <!-- ============ PDF→JPEG ============ -->
+  <section class="panel" id="panel-pdf2img" role="tabpanel" aria-labelledby="tab-pdf2img">
+    <div class="drop" id="pdf2img-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">画像化するPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ · 各ページをJPEGに変換します</div>
+      <input type="file" id="pdf2img-input" accept="application/pdf">
+    </div>
+
+    <div class="split-info" id="pdf2img-info" hidden>
+      <div class="fname" id="pdf2img-fname"></div>
+      <div class="pages" id="pdf2img-pages"></div>
+
+      <div class="mode-group">
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">解像度</div>
+          <div class="seg" id="pdf2img-scale" style="margin-top:8px;">
+            <button class="seg-btn" data-scale="1">標準</button>
+            <button class="seg-btn active" data-scale="2">高精細（2倍）</button>
+            <button class="seg-btn" data-scale="3">最高（3倍）</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="filename-field">
+        <label for="pdf2img-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="pdf2img-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext" id="pdf2img-filename-ext">.jpg</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="pdf2img-btn">JPEGにしてダウンロード</button>
+        <button class="btn btn-ghost" id="pdf2img-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="pdf2img-status" role="status"></div>
+    </div>
+  </section>
+
+  <!-- ============ OCR(検索可能PDF化) ============ -->
+  <section class="panel" id="panel-ocr" role="tabpanel" aria-labelledby="tab-ocr">
+    <div class="drop" id="ocr-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">検索可能にするPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ · スキャンしたPDFに透明なテキスト層を重ねます</div>
+      <input type="file" id="ocr-input" accept="application/pdf">
+    </div>
+
+    <div class="status" id="ocr-load-status" role="status"></div>
+
+    <div class="split-info" id="ocr-info" hidden>
+      <div class="fname" id="ocr-fname"></div>
+      <div class="pages" id="ocr-pages"></div>
+
+      <div class="mode-group">
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">認識する言語</div>
+          <div class="seg" id="ocr-lang" style="margin-top:8px;">
+            <button class="seg-btn active" data-lang="jpn">日本語</button>
+            <button class="seg-btn" data-lang="jpn+eng">日本語+英数字</button>
+            <button class="seg-btn" data-lang="eng">英語</button>
+          </div>
+        </div>
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">読み取り解像度</div>
+          <div class="seg" id="ocr-scale" style="margin-top:8px;">
+            <button class="seg-btn" data-scale="1.5">標準(速い)</button>
+            <button class="seg-btn active" data-scale="2.5">高精細</button>
+            <button class="seg-btn" data-scale="3.5">最高(遅い)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="filename-field">
+        <label for="ocr-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="ocr-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext">.pdf</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="ocr-btn">検索可能PDFにしてダウンロード</button>
+        <button class="btn btn-ghost" id="ocr-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="ocr-status" role="status"></div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-top:10px; line-height:1.6;">
+        見た目は元のスキャン画像のまま、裏側に検索・コピー用の透明なテキストを重ねます(文字の書き換えはできません)。<br>
+        初回は日本語の言語データとフォントのダウンロードが発生するため数十MB通信が発生し、時間がかかります(2回目以降はブラウザにキャッシュされ速くなります)。<br>
+        ページ数や解像度が多いほど時間がかかります。処理はすべてこのブラウザ内で完結します。
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PDF→Markdown ============ -->
+  <section class="panel" id="panel-md" role="tabpanel" aria-labelledby="tab-md">
+    <div class="drop" id="md-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">Markdown化するPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ · 文字のPDFが対象です(画像スキャンPDFは先にOCRタブで検索可能にしてください)</div>
+      <input type="file" id="md-input" accept="application/pdf">
+    </div>
+
+    <div class="status" id="md-load-status" role="status"></div>
+
+    <div class="split-info" id="md-info" hidden>
+      <div class="fname" id="md-fname"></div>
+      <div class="pages" id="md-pages"></div>
+
+      <div class="mode-group">
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">見出し推定の感度</div>
+          <div class="hint">文字サイズが本文より一定以上大きい行を見出しとみなします</div>
+          <div class="seg" id="md-sensitivity" style="margin-top:8px;">
+            <button class="seg-btn" data-th="1.35">弱め</button>
+            <button class="seg-btn active" data-th="1.18">標準</button>
+            <button class="seg-btn" data-th="1.08">強め</button>
+          </div>
+        </div>
+        <label class="mode">
+          <input type="checkbox" id="md-pagebreak" checked>
+          <div>
+            <div class="label">ページの区切りに「---」を挿入する</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="md-btn">変換する</button>
+        <button class="btn btn-ghost" id="md-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="md-status" role="status"></div>
+    </div>
+
+    <div id="md-result" hidden>
+      <div class="md-result-head">
+        <div class="hint">見出しの誤検出などはここで直接編集できます。</div>
+        <div class="md-result-actions">
+          <button class="btn btn-ghost" id="md-copy">コピー</button>
+          <button class="btn" id="md-download">.mdでダウンロード</button>
+        </div>
+      </div>
+      <div class="filename-field">
+        <label for="md-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="md-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext">.md</span>
+        </div>
+      </div>
+      <textarea id="md-output" class="md-textarea mono" spellcheck="false"></textarea>
+    </div>
+  </section>
+
+  <!-- ============ PDF編集(注釈・テキスト追加) ============ -->
+  <section class="panel" id="panel-annotate" role="tabpanel" aria-labelledby="tab-annotate">
+    <div class="drop" id="annotate-drop" tabindex="0" role="button" aria-label="PDFを選択またはドロップ">
+      <div class="big">編集するPDFをここにドロップ、またはクリックして選択</div>
+      <div class="sub">1ファイルのみ · 既存の文字は書き換えできません(新しいテキストを重ねて配置します)</div>
+      <input type="file" id="annotate-input" accept="application/pdf">
+    </div>
+
+    <div class="status" id="annotate-load-status" role="status"></div>
+
+    <div id="annotate-editor" hidden>
+      <div class="split-info" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div class="fname" id="annotate-fname"></div>
+          <div class="pages" id="annotate-pages-label"></div>
+        </div>
+        <div class="hint" style="max-width:320px;">キャンバス上をクリックしてテキストを追加。⠿をドラッグで移動 / テキストをクリックして編集 / ✕で削除。</div>
+      </div>
+
+      <div class="mode-group" style="flex-direction:row; align-items:flex-start; flex-wrap:wrap; gap:28px;">
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">文字サイズ(新規追加分)</div>
+          <div class="seg" id="annot-size" style="margin-top:8px;">
+            <button class="seg-btn" data-size="12">12pt</button>
+            <button class="seg-btn active" data-size="16">16pt</button>
+            <button class="seg-btn" data-size="20">20pt</button>
+            <button class="seg-btn" data-size="28">28pt</button>
+          </div>
+        </div>
+        <div>
+          <div class="label" style="font-size:14px;font-weight:500;">文字色(新規追加分)</div>
+          <input type="color" id="annot-color" value="#22303c" class="annot-color-input">
+        </div>
+      </div>
+
+      <div class="annot-canvas-wrap" id="annot-canvas-wrap">
+        <canvas id="annot-canvas"></canvas>
+        <div class="annot-overlay" id="annot-overlay"></div>
+      </div>
+
+      <div class="annot-nav">
+        <button class="btn btn-ghost" id="annot-prev">← 前のページ</button>
+        <span class="mono" id="annot-page-label"></span>
+        <button class="btn btn-ghost" id="annot-next">次のページ →</button>
+      </div>
+
+      <div class="filename-field">
+        <label for="annotate-filename">保存ファイル名</label>
+        <div class="filename-input-row">
+          <input type="text" id="annotate-filename" class="filename-input mono" placeholder="自動">
+          <span class="filename-ext">.pdf</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="annot-save-btn">この内容で書き込んでダウンロード</button>
+        <button class="btn btn-ghost" id="annot-clear-all">すべての注釈を削除</button>
+        <button class="btn btn-ghost" id="annotate-clear">ファイルを外す</button>
+      </div>
+      <div class="status" id="annotate-status" role="status"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="rule">
+    このページはサーバーを持ちません。開いた瞬間から閉じるまで、PDFはお使いの端末のメモリ内にのみ存在し、タブを閉じれば消えます。
+    暗号化(パスワード付き)PDFは処理できない場合があります。
+  </div>
+</footer>
+
+<script>
+"use strict";
+const { PDFDocument, rgb } = PDFLib;
+
+/* ---------- 共通ユーティリティ ---------- */
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / 1048576).toFixed(2) + " MB";
+}
+
+function download(bytes, filename, mime) {
+  const blob = new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.className = "status" + (kind ? " " + kind : "");
+}
+
+function baseName(name) {
+  return name.replace(/\.pdf$/i, "");
+}
+
+/* 出力ファイル名の指定機能で共通利用 */
+function sanitizeFileName(input, fallback) {
+  const cleaned = (input || "").trim().replace(/[\\/:*?"<>|]/g, "_");
+  return cleaned || fallback;
+}
+
+/* 自動生成ファイル名をinputに反映する。ただしユーザーが手で編集済みの場合は上書きしない
+   (「入力欄が空、または直前の自動生成名のまま」の時だけ新しい自動生成名で更新する) */
+function syncAutoFilename(inputEl, newAuto, state) {
+  if (!inputEl.value || inputEl.value === state.lastAuto) {
+    inputEl.value = newAuto;
+  }
+  state.lastAuto = newAuto;
+}
+
+async function loadPdf(bytes) {
+  return PDFDocument.load(bytes, { ignoreEncryption: false });
+}
+
+/* pdf.js のワーカー設定(全タブのサムネイル生成・テキスト抽出等で共通利用) */
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+}
+
+/* ページサムネイル生成の共通関数(編成タブのロジックを流用・切り出し)
+   pdf: pdfjsLib で読み込み済みのドキュメント, pageNumber: 1-indexed, targetWidth: 目標幅(px) */
+async function renderPageThumb(pdf, pageNumber, targetWidth) {
+  const page = await pdf.getPage(pageNumber);
+  const baseVp = page.getViewport({ scale: 1 });
+  const scale = targetWidth / baseVp.width;
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(vp.width);
+  canvas.height = Math.ceil(vp.height);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  return canvas.toDataURL("image/jpeg", 0.75);
+}
+
+/* bytes(PDF全体)から全ページのサムネイルを1枚ずつ生成し、都度コールバックする共通ヘルパー。
+   statusElを渡すと「サムネイル作成中… i / total」の進捗表示を行う。 */
+async function generateThumbsProgressive(bytes, pageCount, targetWidth, statusEl, onThumb) {
+  const task = pdfjsLib.getDocument({ data: bytes.slice() });
+  const pdf = await task.promise;
+  for (let i = 0; i < pageCount; i++) {
+    if (statusEl) setStatus(statusEl, `サムネイル作成中… ${i + 1} / ${pageCount}`, "busy");
+    const url = await renderPageThumb(pdf, i + 1, 220);
+    onThumb(i, url);
+    await new Promise(r => setTimeout(r));
+  }
+  if (statusEl) setStatus(statusEl, "", "");
+}
+
+/* 選択済みページ番号(1-indexed)の集合 → "1-3, 5, 8-10" 形式の文字列 */
+function formatPageRanges(pageNumbers) {
+  const sorted = [...pageNumbers].sort((a, b) => a - b);
+  if (!sorted.length) return "";
+  const parts = [];
+  let start = sorted[0], prev = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    const n = sorted[i];
+    if (n === prev + 1) { prev = n; continue; }
+    parts.push(start === prev ? `${start}` : `${start}-${prev}`);
+    start = n; prev = n;
+  }
+  parts.push(start === prev ? `${start}` : `${start}-${prev}`);
+  return parts.join(", ");
+}
+
+/* ---------- タブ切替 ---------- */
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => {
+      t.classList.remove("active");
+      t.setAttribute("aria-selected", "false");
+    });
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+    tab.classList.add("active");
+    tab.setAttribute("aria-selected", "true");
+    document.getElementById(tab.dataset.panel).classList.add("active");
+  });
+});
+
+/* ---------- ドロップゾーン共通配線 ---------- */
+function wireDrop(dropEl, inputEl, onFiles) {
+  dropEl.addEventListener("click", () => inputEl.click());
+  dropEl.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inputEl.click(); }
+  });
+  inputEl.addEventListener("change", () => {
+    onFiles(Array.from(inputEl.files));
+    inputEl.value = "";
+  });
+  ["dragover", "dragenter"].forEach(ev =>
+    dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.add("over"); })
+  );
+  ["dragleave", "drop"].forEach(ev =>
+    dropEl.addEventListener(ev, e => { e.preventDefault(); dropEl.classList.remove("over"); })
+  );
+  dropEl.addEventListener("drop", e => {
+    const files = Array.from(e.dataTransfer.files)
+      .filter(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    if (files.length) onFiles(files);
+  });
+}
+
+/* ==================================================
+   結合
+================================================== */
+const mergeFiles = []; // { name, size, bytes, uid, thumbUrl }
+const mergeList = document.getElementById("merge-list");
+const mergeBtn = document.getElementById("merge-btn");
+const mergeClear = document.getElementById("merge-clear");
+const mergeStatus = document.getElementById("merge-status");
+const mergeFilenameField = document.getElementById("merge-filename-field");
+const mergeFilenameInput = document.getElementById("merge-filename");
+const mergeFilenameState = { lastAuto: "" };
+let mergeFileIdSeq = 1;
+
+wireDrop(
+  document.getElementById("merge-drop"),
+  document.getElementById("merge-input"),
+  async files => {
+    const added = [];
+    for (const f of files) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const entry = { name: f.name, size: f.size, bytes, uid: mergeFileIdSeq++, thumbUrl: null };
+      mergeFiles.push(entry);
+      added.push(entry);
+    }
+    renderMergeList();
+    setStatus(mergeStatus, "", "");
+    added.forEach(entry => generateMergeThumb(entry));
+  }
+);
+
+/* 1ページ目のサムネイルを非同期で1回だけ生成してキャッシュする */
+async function generateMergeThumb(entry) {
+  if (entry.thumbUrl) return;
+  try {
+    const task = pdfjsLib.getDocument({ data: entry.bytes.slice() });
+    const pdf = await task.promise;
+    entry.thumbUrl = await renderPageThumb(pdf, 1, 96);
+    renderMergeList();
+  } catch (e) {
+    // サムネイル生成に失敗しても結合処理自体には影響させない
+  }
+}
+
+function renderMergeList() {
+  mergeList.innerHTML = "";
+  mergeFiles.forEach((f, i) => {
+    const li = document.createElement("li");
+    li.className = "file-item";
+
+    const order = document.createElement("span");
+    order.className = "order";
+    order.textContent = String(i + 1).padStart(2, "0");
+
+    const thumb = document.createElement("span");
+    thumb.className = "file-thumb";
+    if (f.thumbUrl) {
+      const img = document.createElement("img");
+      img.src = f.thumbUrl;
+      img.alt = "";
+      thumb.appendChild(img);
+    } else {
+      const ph = document.createElement("span");
+      ph.className = "ph";
+      ph.textContent = "PDF";
+      thumb.appendChild(ph);
+    }
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = f.name;
+    name.title = f.name;
+
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = fmtSize(f.size);
+
+    const up = mkIcon("↑", "上へ", () => moveFile(i, -1));
+    up.disabled = i === 0;
+    const down = mkIcon("↓", "下へ", () => moveFile(i, 1));
+    down.disabled = i === mergeFiles.length - 1;
+    const del = mkIcon("✕", "外す", () => { mergeFiles.splice(i, 1); renderMergeList(); });
+    del.classList.add("del");
+
+    li.append(order, thumb, name, meta, up, down, del);
+    mergeList.appendChild(li);
+  });
+  const has = mergeFiles.length > 0;
+  mergeBtn.disabled = mergeFiles.length < 2;
+  mergeClear.disabled = !has;
+  mergeFilenameField.hidden = !has;
+  if (has) {
+    syncAutoFilename(mergeFilenameInput, "結合_" + baseName(mergeFiles[0].name), mergeFilenameState);
+  }
+}
+
+function mkIcon(txt, label, fn) {
+  const b = document.createElement("button");
+  b.className = "icon-btn";
+  b.textContent = txt;
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  b.addEventListener("click", fn);
+  return b;
+}
+
+function moveFile(i, dir) {
+  const j = i + dir;
+  [mergeFiles[i], mergeFiles[j]] = [mergeFiles[j], mergeFiles[i]];
+  renderMergeList();
+}
+
+mergeClear.addEventListener("click", () => {
+  mergeFiles.length = 0;
+  renderMergeList();
+  mergeFilenameInput.value = "";
+  mergeFilenameState.lastAuto = "";
+  setStatus(mergeStatus, "", "");
+});
+
+mergeBtn.addEventListener("click", async () => {
+  mergeBtn.disabled = true;
+  setStatus(mergeStatus, "結合中…", "busy");
+  try {
+    const out = await PDFDocument.create();
+    for (const f of mergeFiles) {
+      let src;
+      try {
+        src = await loadPdf(f.bytes);
+      } catch (e) {
+        throw new Error(`「${f.name}」を読み込めませんでした。暗号化または破損の可能性があります。`);
+      }
+      const pages = await out.copyPages(src, src.getPageIndices());
+      pages.forEach(p => out.addPage(p));
+    }
+    const bytes = await out.save();
+    const finalName = sanitizeFileName(mergeFilenameInput.value, "結合_" + baseName(mergeFiles[0].name));
+    download(bytes, `${finalName}.pdf`, "application/pdf");
+    setStatus(mergeStatus, `完了 — ${mergeFiles.length}ファイルを結合しました(${fmtSize(bytes.length)})`, "ok");
+  } catch (e) {
+    setStatus(mergeStatus, e.message || "結合に失敗しました。", "err");
+  } finally {
+    mergeBtn.disabled = mergeFiles.length < 2;
+  }
+});
+
+/* ==================================================
+   分割
+================================================== */
+let splitFile = null; // { name, bytes, pageCount }
+const splitInfo = document.getElementById("split-info");
+const splitFname = document.getElementById("split-fname");
+const splitPages = document.getElementById("split-pages");
+const splitBtn = document.getElementById("split-btn");
+const splitClearBtn = document.getElementById("split-clear");
+const splitStatus = document.getElementById("split-status");
+const rangeInput = document.getElementById("range-input");
+const splitFilenameInput = document.getElementById("split-filename");
+const splitFilenameExt = document.getElementById("split-filename-ext");
+const splitFilenameState = { lastAuto: "" };
+const splitGrid = document.getElementById("split-grid");
+const splitGridHint = document.getElementById("split-grid-hint");
+let splitSelectedPages = new Set(); // 1-indexed
+let splitRangeSyncing = false; // rangeInput⇔グリッドの相互更新ループ防止
+
+function splitAutoName(base, mode) {
+  return mode === "range" ? `${base}_抜粋` : `${base}_分割`;
+}
+
+function updateSplitFilenamePreview() {
+  if (!splitFile) return;
+  const mode = document.querySelector('input[name="split-mode"]:checked').value;
+  const base = baseName(splitFile.name);
+  splitFilenameExt.textContent = mode === "range" ? ".pdf" : ".zip";
+  syncAutoFilename(splitFilenameInput, splitAutoName(base, mode), splitFilenameState);
+}
+
+function renderSplitGrid(pageCount) {
+  splitGrid.innerHTML = "";
+  for (let i = 0; i < pageCount; i++) {
+    const n = i + 1;
+    const card = document.createElement("div");
+    card.className = "thumb-card";
+    card.dataset.page = n;
+
+    const num = document.createElement("div");
+    num.className = "thumb-num";
+    num.textContent = `${n}ページ目`;
+
+    const wrap = document.createElement("div");
+    wrap.className = "thumb-img-wrap";
+    const img = document.createElement("img");
+    img.dataset.page = n;
+    img.alt = `${n}ページ目のサムネイル`;
+    wrap.appendChild(img);
+
+    card.append(num, wrap);
+    card.addEventListener("click", () => onSplitCardClick(n));
+    splitGrid.appendChild(card);
+  }
+  refreshSplitGridState();
+}
+
+function onSplitCardClick(n) {
+  const mode = document.querySelector('input[name="split-mode"]:checked').value;
+  if (mode !== "range") return;
+  if (splitSelectedPages.has(n)) splitSelectedPages.delete(n);
+  else splitSelectedPages.add(n);
+  splitRangeSyncing = true;
+  rangeInput.value = formatPageRanges([...splitSelectedPages]);
+  splitRangeSyncing = false;
+  refreshSplitGridState();
+}
+
+function refreshSplitGridState() {
+  const mode = document.querySelector('input[name="split-mode"]:checked').value;
+  if (splitGridHint) splitGridHint.hidden = mode !== "range";
+  splitGrid.querySelectorAll(".thumb-card").forEach(card => {
+    const n = Number(card.dataset.page);
+    card.classList.toggle("selectable", mode === "range");
+    card.classList.toggle("preview-only", mode !== "range");
+    card.classList.toggle("selected", mode === "range" && splitSelectedPages.has(n));
+  });
+}
+
+/* range-inputの手入力をグリッドの選択状態へ反映(双方向同期) */
+function syncSplitGridFromRangeInput() {
+  if (splitRangeSyncing || !splitFile) return;
+  const mode = document.querySelector('input[name="split-mode"]:checked').value;
+  if (mode !== "range") return;
+  const text = rangeInput.value.trim();
+  if (!text) { splitSelectedPages = new Set(); refreshSplitGridState(); return; }
+  try {
+    const indices = parseRanges(text, splitFile.pageCount); // 0-indexed
+    splitSelectedPages = new Set(indices.map(i => i + 1));
+    refreshSplitGridState();
+  } catch (e) {
+    // 入力途中などパース不能な間はグリッドを更新しない
+  }
+}
+rangeInput.addEventListener("input", syncSplitGridFromRangeInput);
+
+wireDrop(
+  document.getElementById("split-drop"),
+  document.getElementById("split-input"),
+  async files => {
+    const f = files[0];
+    setStatus(splitStatus, "", "");
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      splitFile = { name: f.name, bytes, pageCount: doc.getPageCount() };
+      splitFname.textContent = f.name;
+      splitPages.textContent = `全 ${splitFile.pageCount} ページ · ${fmtSize(f.size)}`;
+      rangeInput.placeholder = splitFile.pageCount > 1 ? `1-${splitFile.pageCount}` : "1";
+      rangeInput.value = "";
+      splitInfo.hidden = false;
+      splitFilenameState.lastAuto = "";
+      splitFilenameInput.value = "";
+      updateSplitFilenamePreview();
+      splitSelectedPages = new Set();
+      renderSplitGrid(splitFile.pageCount);
+      generateThumbsProgressive(bytes, splitFile.pageCount, 220, splitStatus, (i, url) => {
+        const img = splitGrid.querySelector(`img[data-page="${i + 1}"]`);
+        if (img) img.src = url;
+      });
+    } catch (e) {
+      splitFile = null;
+      splitInfo.hidden = true;
+      setStatus(splitStatus, "このPDFを読み込めませんでした。暗号化または破損の可能性があります。", "err");
+      splitInfo.hidden = false;
+      splitFname.textContent = f.name;
+      splitPages.textContent = "読み込み失敗";
+      splitGrid.innerHTML = "";
+    }
+  }
+);
+
+document.querySelectorAll('input[name="split-mode"]').forEach(r => {
+  r.addEventListener("change", () => {
+    rangeInput.disabled = r.value !== "range" ? r.checked : !r.checked && false;
+    const mode = document.querySelector('input[name="split-mode"]:checked').value;
+    rangeInput.disabled = mode !== "range";
+    updateSplitFilenamePreview();
+    refreshSplitGridState();
+  });
+});
+
+splitClearBtn.addEventListener("click", () => {
+  splitFile = null;
+  splitInfo.hidden = true;
+  splitFilenameInput.value = "";
+  splitFilenameState.lastAuto = "";
+  splitSelectedPages = new Set();
+  splitGrid.innerHTML = "";
+  setStatus(splitStatus, "", "");
+});
+
+/* "1-3, 5, 8-10" → [0,1,2,4,7,8,9](0始まり・重複除去・順序維持) */
+function parseRanges(text, max) {
+  const out = [];
+  const seen = new Set();
+  const parts = text.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+  if (!parts.length) throw new Error("ページ範囲を入力してください。");
+  for (const part of parts) {
+    const m = part.match(/^(\d+)\s*[-〜~]\s*(\d+)$/) || part.match(/^(\d+)$/);
+    if (!m) throw new Error(`「${part}」の形式が読み取れません。例: 1-3, 5`);
+    const a = parseInt(m[1], 10);
+    const b = m[2] !== undefined ? parseInt(m[2], 10) : a;
+    if (a < 1 || b < 1 || a > max || b > max)
+      throw new Error(`ページ番号は 1〜${max} の範囲で指定してください。`);
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    for (let p = lo; p <= hi; p++) {
+      if (!seen.has(p)) { seen.add(p); out.push(p - 1); }
+    }
+  }
+  return out;
+}
+
+splitBtn.addEventListener("click", async () => {
+  if (!splitFile) return;
+  const mode = document.querySelector('input[name="split-mode"]:checked').value;
+  splitBtn.disabled = true;
+  try {
+    const src = await loadPdf(splitFile.bytes);
+    const base = baseName(splitFile.name);
+
+    if (mode === "range") {
+      const indices = parseRanges(rangeInput.value, splitFile.pageCount);
+      setStatus(splitStatus, "抽出中…", "busy");
+      const out = await PDFDocument.create();
+      const pages = await out.copyPages(src, indices);
+      pages.forEach(p => out.addPage(p));
+      const bytes = await out.save();
+      const finalName = sanitizeFileName(splitFilenameInput.value, splitAutoName(base, "range"));
+      download(bytes, `${finalName}.pdf`, "application/pdf");
+      setStatus(splitStatus, `完了 — ${indices.length}ページを抽出しました(${fmtSize(bytes.length)})`, "ok");
+    } else {
+      setStatus(splitStatus, "分割中… 0 / " + splitFile.pageCount, "busy");
+      const zip = new JSZip();
+      const digits = String(splitFile.pageCount).length;
+      for (let i = 0; i < splitFile.pageCount; i++) {
+        const out = await PDFDocument.create();
+        const [page] = await out.copyPages(src, [i]);
+        out.addPage(page);
+        const bytes = await out.save();
+        zip.file(`${base}_p${String(i + 1).padStart(digits, "0")}.pdf`, bytes);
+        setStatus(splitStatus, `分割中… ${i + 1} / ${splitFile.pageCount}`, "busy");
+        await new Promise(r => setTimeout(r)); // UI更新を挟む
+      }
+      const zipBytes = await zip.generateAsync({ type: "uint8array" });
+      const finalName = sanitizeFileName(splitFilenameInput.value, splitAutoName(base, "each"));
+      download(zipBytes, `${finalName}.zip`, "application/zip");
+      setStatus(splitStatus, `完了 — ${splitFile.pageCount}ページを個別PDFにしてZIP保存しました(${fmtSize(zipBytes.length)})`, "ok");
+    }
+  } catch (e) {
+    setStatus(splitStatus, e.message || "分割に失敗しました。", "err");
+  } finally {
+    splitBtn.disabled = false;
+  }
+});
+
+/* セグメント切替の共通配線 */
+function wireSeg(container, onPick) {
+  container.querySelectorAll(".seg-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      container.querySelectorAll(".seg-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      if (onPick) onPick(btn.dataset);
+    });
+  });
+}
+
+/* ==================================================
+   回転
+================================================== */
+let rotateFile = null;
+const rotateInfo = document.getElementById("rotate-info");
+const rotateFname = document.getElementById("rotate-fname");
+const rotatePagesEl = document.getElementById("rotate-pages");
+const rotateBtn = document.getElementById("rotate-btn");
+const rotateStatus = document.getElementById("rotate-status");
+const rotateRange = document.getElementById("rotate-range");
+const rotateFilenameInput = document.getElementById("rotate-filename");
+const rotateGrid = document.getElementById("rotate-grid");
+const rotateGridHint = document.getElementById("rotate-grid-hint");
+let rotateDeg = 90;
+let rotateSelectedPages = new Set(); // 1-indexed(scope=rangeの時のみ使用)
+let rotateRangeSyncing = false;
+
+wireSeg(document.getElementById("rotate-dir"), d => {
+  rotateDeg = parseInt(d.deg, 10);
+  updateRotatePreviewTransforms();
+});
+
+function renderRotateGrid(pageCount) {
+  rotateGrid.innerHTML = "";
+  for (let i = 0; i < pageCount; i++) {
+    const n = i + 1;
+    const card = document.createElement("div");
+    card.className = "thumb-card";
+    card.dataset.page = n;
+
+    const num = document.createElement("div");
+    num.className = "thumb-num";
+    num.textContent = `${n}ページ目`;
+
+    const wrap = document.createElement("div");
+    wrap.className = "thumb-img-wrap";
+    const img = document.createElement("img");
+    img.dataset.page = n;
+    img.alt = `${n}ページ目のサムネイル`;
+    wrap.appendChild(img);
+
+    card.append(num, wrap);
+    card.addEventListener("click", () => onRotateCardClick(n));
+    rotateGrid.appendChild(card);
+  }
+  refreshRotateGridState();
+  updateRotatePreviewTransforms();
+}
+
+function rotateScope() {
+  return document.querySelector('input[name="rotate-scope"]:checked').value;
+}
+
+function onRotateCardClick(n) {
+  if (rotateScope() !== "range") return;
+  if (rotateSelectedPages.has(n)) rotateSelectedPages.delete(n);
+  else rotateSelectedPages.add(n);
+  rotateRangeSyncing = true;
+  rotateRange.value = formatPageRanges([...rotateSelectedPages]);
+  rotateRangeSyncing = false;
+  refreshRotateGridState();
+  updateRotatePreviewTransforms();
+}
+
+function refreshRotateGridState() {
+  const scope = rotateScope();
+  if (rotateGridHint) rotateGridHint.hidden = scope !== "range";
+  rotateGrid.querySelectorAll(".thumb-card").forEach(card => {
+    const n = Number(card.dataset.page);
+    card.classList.toggle("selectable", scope === "range");
+    card.classList.toggle("selected", scope === "range" && rotateSelectedPages.has(n));
+  });
+}
+
+/* 対象になっているサムネイルだけをCSSで見た目回転させる(実PDFは変更しない、プレビューのみ) */
+function updateRotatePreviewTransforms() {
+  const scope = rotateScope();
+  rotateGrid.querySelectorAll(".thumb-card").forEach(card => {
+    const n = Number(card.dataset.page);
+    const isTarget = scope === "all" || rotateSelectedPages.has(n);
+    const img = card.querySelector("img");
+    if (img) img.style.transform = isTarget ? `rotate(${rotateDeg}deg)` : "";
+  });
+}
+
+/* rotate-rangeの手入力をグリッドの選択状態へ反映(双方向同期) */
+function syncRotateGridFromRangeInput() {
+  if (rotateRangeSyncing || !rotateFile) return;
+  if (rotateScope() !== "range") return;
+  const text = rotateRange.value.trim();
+  if (!text) { rotateSelectedPages = new Set(); refreshRotateGridState(); updateRotatePreviewTransforms(); return; }
+  try {
+    const indices = parseRanges(text, rotateFile.pageCount); // 0-indexed
+    rotateSelectedPages = new Set(indices.map(i => i + 1));
+    refreshRotateGridState();
+    updateRotatePreviewTransforms();
+  } catch (e) {
+    // 入力途中などパース不能な間はグリッドを更新しない
+  }
+}
+rotateRange.addEventListener("input", syncRotateGridFromRangeInput);
+
+wireDrop(
+  document.getElementById("rotate-drop"),
+  document.getElementById("rotate-input"),
+  async files => {
+    const f = files[0];
+    setStatus(rotateStatus, "", "");
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      rotateFile = { name: f.name, bytes, pageCount: doc.getPageCount() };
+      rotateFname.textContent = f.name;
+      rotatePagesEl.textContent = `全 ${rotateFile.pageCount} ページ · ${fmtSize(f.size)}`;
+      rotateRange.placeholder = `1-${rotateFile.pageCount}`;
+      rotateInfo.hidden = false;
+      rotateFilenameInput.value = `${baseName(f.name)}_回転`;
+      rotateSelectedPages = new Set();
+      rotateRange.value = "";
+      renderRotateGrid(rotateFile.pageCount);
+      generateThumbsProgressive(bytes, rotateFile.pageCount, 220, rotateStatus, (i, url) => {
+        const img = rotateGrid.querySelector(`img[data-page="${i + 1}"]`);
+        if (img) img.src = url;
+      });
+    } catch (e) {
+      rotateFile = null;
+      rotateInfo.hidden = false;
+      rotateFname.textContent = f.name;
+      rotatePagesEl.textContent = "読み込み失敗";
+      setStatus(rotateStatus, "このPDFを読み込めませんでした。暗号化または破損の可能性があります。", "err");
+      rotateGrid.innerHTML = "";
+    }
+  }
+);
+
+document.querySelectorAll('input[name="rotate-scope"]').forEach(r => {
+  r.addEventListener("change", () => {
+    rotateRange.disabled = document.querySelector('input[name="rotate-scope"]:checked').value !== "range";
+    refreshRotateGridState();
+    updateRotatePreviewTransforms();
+  });
+});
+
+document.getElementById("rotate-clear").addEventListener("click", () => {
+  rotateFile = null;
+  rotateInfo.hidden = true;
+  rotateFilenameInput.value = "";
+  rotateSelectedPages = new Set();
+  rotateGrid.innerHTML = "";
+  setStatus(rotateStatus, "", "");
+});
+
+rotateBtn.addEventListener("click", async () => {
+  if (!rotateFile) return;
+  rotateBtn.disabled = true;
+  setStatus(rotateStatus, "回転中…", "busy");
+  try {
+    const doc = await loadPdf(rotateFile.bytes);
+    const scope = document.querySelector('input[name="rotate-scope"]:checked').value;
+    let targets;
+    if (scope === "range") {
+      targets = new Set(parseRanges(rotateRange.value, rotateFile.pageCount));
+    } else {
+      targets = new Set(doc.getPageIndices());
+    }
+    doc.getPages().forEach((page, i) => {
+      if (targets.has(i)) {
+        const cur = page.getRotation().angle;
+        page.setRotation(PDFLib.degrees((cur + rotateDeg) % 360));
+      }
+    });
+    const bytes = await doc.save();
+    const finalName = sanitizeFileName(rotateFilenameInput.value, `${baseName(rotateFile.name)}_回転`);
+    download(bytes, `${finalName}.pdf`, "application/pdf");
+    setStatus(rotateStatus, `完了 — ${targets.size}ページを回転しました(${fmtSize(bytes.length)})`, "ok");
+  } catch (e) {
+    setStatus(rotateStatus, e.message || "回転に失敗しました。", "err");
+  } finally {
+    rotateBtn.disabled = false;
+  }
+});
+
+/* ==================================================
+   編成(サムネイル並べ替え・削除・個別回転)
+================================================== */
+let organizeSrcBytes = null;
+let organizeName = "";
+let organizePages = [];         // { origIndex, rotationDelta, baseRotation, thumbUrl }
+let organizeOriginalPages = []; // 読み込み直後のスナップショット(リセット用)
+let organizeDragIndex = null;
+
+const organizeInfo = document.getElementById("organize-info");
+const organizeFname = document.getElementById("organize-fname");
+const organizePagesEl = document.getElementById("organize-pages");
+const organizeGrid = document.getElementById("organize-grid");
+const organizeBtn = document.getElementById("organize-btn");
+const organizeResetBtn = document.getElementById("organize-reset");
+const organizeClearBtn = document.getElementById("organize-clear");
+const organizeStatus = document.getElementById("organize-status");
+const organizeLoadStatus = document.getElementById("organize-load-status");
+const organizeFilenameInput = document.getElementById("organize-filename");
+
+wireDrop(
+  document.getElementById("organize-drop"),
+  document.getElementById("organize-input"),
+  async files => {
+    const f = files[0];
+    setStatus(organizeLoadStatus, "読み込み中…", "busy");
+    setStatus(organizeStatus, "", "");
+    organizeInfo.hidden = true;
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      const count = doc.getPageCount();
+      const baseRotations = doc.getPages().map(p => p.getRotation().angle);
+
+      organizeSrcBytes = bytes;
+      organizeName = f.name;
+      organizeFname.textContent = f.name;
+      updateOrganizePagesLabel(count, count);
+      organizeInfo.hidden = false;
+      setStatus(organizeLoadStatus, "", "");
+      organizeFilenameInput.value = `${baseName(f.name)}_編成`;
+
+      organizePages = Array.from({ length: count }, (_, i) => ({
+        origIndex: i,
+        rotationDelta: 0,
+        baseRotation: baseRotations[i],
+        thumbUrl: null
+      }));
+      organizeOriginalPages = organizePages.map(p => ({ ...p }));
+      renderOrganizeGrid();
+
+      // サムネイルを1枚ずつ生成して差し込む(渡す配列はpdf.jsに所有権が移るためコピー)
+      const task = pdfjsLib.getDocument({ data: bytes.slice() });
+      const pdf = await task.promise;
+      for (let i = 0; i < count; i++) {
+        setStatus(organizeStatus, `サムネイル作成中… ${i + 1} / ${count}`, "busy");
+        const thumbUrl = await renderPageThumb(pdf, i + 1, 220);
+        const entry = organizePages.find(p => p.origIndex === i);
+        if (entry) entry.thumbUrl = thumbUrl;
+        const origEntry = organizeOriginalPages.find(p => p.origIndex === i);
+        if (origEntry) origEntry.thumbUrl = thumbUrl;
+        const img = organizeGrid.querySelector(`img[data-origidx="${i}"]`);
+        if (img) img.src = thumbUrl;
+        await new Promise(r => setTimeout(r));
+      }
+      setStatus(organizeStatus, "", "");
+    } catch (e) {
+      organizeSrcBytes = null;
+      organizePages = [];
+      organizeOriginalPages = [];
+      organizeInfo.hidden = true;
+      setStatus(organizeLoadStatus, "このPDFを読み込めませんでした。暗号化または破損の可能性があります。", "err");
+    }
+  }
+);
+
+function updateOrganizePagesLabel(current, total) {
+  organizePagesEl.textContent = current === total
+    ? `全 ${total} ページ`
+    : `${current} / 元 ${total} ページ`;
+}
+
+function renderOrganizeGrid() {
+  organizeGrid.innerHTML = "";
+  organizePages.forEach((p, i) => {
+    const card = document.createElement("div");
+    card.className = "thumb-card";
+    card.draggable = true;
+    card.dataset.pos = i;
+
+    const num = document.createElement("div");
+    num.className = "thumb-num";
+    num.textContent = p.origIndex === i
+      ? `${i + 1}ページ目`
+      : `${i + 1}ページ目 (元 ${p.origIndex + 1})`;
+
+    const wrap = document.createElement("div");
+    wrap.className = "thumb-img-wrap";
+    const img = document.createElement("img");
+    img.dataset.origidx = p.origIndex;
+    img.style.transform = `rotate(${p.rotationDelta}deg)`;
+    img.alt = `${i + 1}ページ目のサムネイル`;
+    if (p.thumbUrl) img.src = p.thumbUrl;
+    wrap.appendChild(img);
+
+    const tools = document.createElement("div");
+    tools.className = "thumb-tools";
+    const rotL = mkIcon("↺", "左に90度回転", () => {
+      p.rotationDelta = (p.rotationDelta + 270) % 360;
+      img.style.transform = `rotate(${p.rotationDelta}deg)`;
+    });
+    const rotR = mkIcon("↻", "右に90度回転", () => {
+      p.rotationDelta = (p.rotationDelta + 90) % 360;
+      img.style.transform = `rotate(${p.rotationDelta}deg)`;
+    });
+    const del = mkIcon("✕", "このページを外す", () => {
+      organizePages.splice(i, 1);
+      renderOrganizeGrid();
+    });
+    del.classList.add("del");
+    tools.append(rotL, rotR, del);
+
+    card.append(num, wrap, tools);
+    wireOrganizeDrag(card);
+    organizeGrid.appendChild(card);
+  });
+  updateOrganizePagesLabel(organizePages.length, organizeOriginalPages.length || organizePages.length);
+  organizeBtn.disabled = organizePages.length === 0;
+}
+
+function wireOrganizeDrag(card) {
+  card.addEventListener("dragstart", () => {
+    organizeDragIndex = Number(card.dataset.pos);
+    card.classList.add("dragging");
+  });
+  card.addEventListener("dragend", () => {
+    card.classList.remove("dragging");
+    organizeGrid.querySelectorAll(".thumb-card").forEach(c => c.classList.remove("drop-before", "drop-after"));
+  });
+  card.addEventListener("dragover", e => {
+    e.preventDefault();
+    const rect = card.getBoundingClientRect();
+    const before = (e.clientX - rect.left) < rect.width / 2;
+    organizeGrid.querySelectorAll(".thumb-card").forEach(c => c.classList.remove("drop-before", "drop-after"));
+    card.classList.add(before ? "drop-before" : "drop-after");
+  });
+  card.addEventListener("drop", e => {
+    e.preventDefault();
+    organizeGrid.querySelectorAll(".thumb-card").forEach(c => c.classList.remove("drop-before", "drop-after"));
+    const targetPos = Number(card.dataset.pos);
+    if (organizeDragIndex === null || organizeDragIndex === targetPos) return;
+    const rect = card.getBoundingClientRect();
+    const before = (e.clientX - rect.left) < rect.width / 2;
+    let insertAt = before ? targetPos : targetPos + 1;
+    const [moved] = organizePages.splice(organizeDragIndex, 1);
+    if (organizeDragIndex < insertAt) insertAt -= 1;
+    organizePages.splice(insertAt, 0, moved);
+    organizeDragIndex = null;
+    renderOrganizeGrid();
+  });
+}
+
+organizeResetBtn.addEventListener("click", () => {
+  if (!organizeOriginalPages.length) return;
+  organizePages = organizeOriginalPages.map(p => ({ ...p, rotationDelta: 0 }));
+  renderOrganizeGrid();
+  setStatus(organizeStatus, "", "");
+});
+
+organizeClearBtn.addEventListener("click", () => {
+  organizeSrcBytes = null;
+  organizePages = [];
+  organizeOriginalPages = [];
+  organizeInfo.hidden = true;
+  organizeGrid.innerHTML = "";
+  organizeFilenameInput.value = "";
+  setStatus(organizeStatus, "", "");
+  setStatus(organizeLoadStatus, "", "");
+});
+
+organizeBtn.addEventListener("click", async () => {
+  if (!organizeSrcBytes || !organizePages.length) return;
+  organizeBtn.disabled = true;
+  setStatus(organizeStatus, "書き出し中…", "busy");
+  try {
+    const src = await loadPdf(organizeSrcBytes);
+    const out = await PDFDocument.create();
+    const order = organizePages.map(p => p.origIndex);
+    const copied = await out.copyPages(src, order);
+    copied.forEach((page, i) => {
+      const p = organizePages[i];
+      const finalDeg = (p.baseRotation + p.rotationDelta) % 360;
+      page.setRotation(PDFLib.degrees(finalDeg));
+      out.addPage(page);
+    });
+    const bytes = await out.save();
+    const finalName = sanitizeFileName(organizeFilenameInput.value, `${baseName(organizeName)}_編成`);
+    download(bytes, `${finalName}.pdf`, "application/pdf");
+    setStatus(organizeStatus, `完了 — ${organizePages.length}ページで書き出しました(${fmtSize(bytes.length)})`, "ok");
+  } catch (e) {
+    setStatus(organizeStatus, e.message || "書き出しに失敗しました。", "err");
+  } finally {
+    organizeBtn.disabled = organizePages.length === 0;
+  }
+});
+
+/* ==================================================
+   JPEG→PDF
+================================================== */
+const img2pdfFiles = []; // { name, size, bytes, type, thumbUrl }
+const img2pdfList = document.getElementById("img2pdf-list");
+const img2pdfBtn = document.getElementById("img2pdf-btn");
+const img2pdfClear = document.getElementById("img2pdf-clear");
+const img2pdfStatus = document.getElementById("img2pdf-status");
+const img2pdfOpts = document.getElementById("img2pdf-opts");
+const img2pdfFilenameField = document.getElementById("img2pdf-filename-field");
+const img2pdfFilenameInput = document.getElementById("img2pdf-filename");
+const img2pdfFilenameState = { lastAuto: "" };
+let img2pdfSize = "fit";
+let img2pdfMarginMm = 0;
+
+wireSeg(document.getElementById("img2pdf-size"), d => { img2pdfSize = d.size; });
+wireSeg(document.getElementById("img2pdf-margin"), d => { img2pdfMarginMm = parseFloat(d.mm); });
+
+function addImg2pdfFile(f) {
+  return f.arrayBuffer().then(buf => {
+    const bytes = new Uint8Array(buf);
+    const thumbUrl = URL.createObjectURL(f);
+    img2pdfFiles.push({ name: f.name, size: f.size, bytes, type: f.type, thumbUrl });
+  });
+}
+
+wireDrop(
+  document.getElementById("img2pdf-drop"),
+  document.getElementById("img2pdf-input"),
+  async files => {
+    for (const f of files) {
+      if (!/^image\/(jpeg|png)$/.test(f.type)) continue;
+      await addImg2pdfFile(f);
+    }
+    renderImg2pdfList();
+    setStatus(img2pdfStatus, "", "");
+  }
+);
+// ドロップ側は image/png も受けたいので、drop の pdf フィルタを回避して独自処理を追加
+(function () {
+  const dropEl = document.getElementById("img2pdf-drop");
+  dropEl.addEventListener("drop", async e => {
+    const imgs = Array.from(e.dataTransfer.files).filter(f => /^image\/(jpeg|png)$/.test(f.type));
+    if (!imgs.length) return;
+    for (const f of imgs) {
+      await addImg2pdfFile(f);
+    }
+    renderImg2pdfList();
+  });
+})();
+
+function renderImg2pdfList() {
+  img2pdfList.innerHTML = "";
+  img2pdfFiles.forEach((f, i) => {
+    const li = document.createElement("li");
+    li.className = "file-item";
+    const order = document.createElement("span");
+    order.className = "order";
+    order.textContent = String(i + 1).padStart(2, "0");
+    const thumb = document.createElement("span");
+    thumb.className = "file-thumb";
+    const img = document.createElement("img");
+    img.src = f.thumbUrl;
+    img.alt = "";
+    thumb.appendChild(img);
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = f.name;
+    name.title = f.name;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = fmtSize(f.size);
+    const up = mkIcon("↑", "上へ", () => { swap(img2pdfFiles, i, i - 1); renderImg2pdfList(); });
+    up.disabled = i === 0;
+    const down = mkIcon("↓", "下へ", () => { swap(img2pdfFiles, i, i + 1); renderImg2pdfList(); });
+    down.disabled = i === img2pdfFiles.length - 1;
+    const del = mkIcon("✕", "外す", () => {
+      const [removed] = img2pdfFiles.splice(i, 1);
+      if (removed && removed.thumbUrl) URL.revokeObjectURL(removed.thumbUrl);
+      renderImg2pdfList();
+    });
+    del.classList.add("del");
+    li.append(order, thumb, name, meta, up, down, del);
+    img2pdfList.appendChild(li);
+  });
+  const has = img2pdfFiles.length > 0;
+  img2pdfBtn.disabled = !has;
+  img2pdfClear.disabled = !has;
+  img2pdfOpts.hidden = !has;
+  img2pdfFilenameField.hidden = !has;
+  if (has) {
+    syncAutoFilename(img2pdfFilenameInput, `画像_${img2pdfFiles.length}枚`, img2pdfFilenameState);
+  }
+}
+
+function swap(arr, i, j) { [arr[i], arr[j]] = [arr[j], arr[i]]; }
+
+img2pdfClear.addEventListener("click", () => {
+  img2pdfFiles.forEach(f => { if (f.thumbUrl) URL.revokeObjectURL(f.thumbUrl); });
+  img2pdfFiles.length = 0;
+  renderImg2pdfList();
+  img2pdfFilenameInput.value = "";
+  img2pdfFilenameState.lastAuto = "";
+  setStatus(img2pdfStatus, "", "");
+});
+
+img2pdfBtn.addEventListener("click", async () => {
+  img2pdfBtn.disabled = true;
+  setStatus(img2pdfStatus, "変換中…", "busy");
+  try {
+    const doc = await PDFDocument.create();
+    const A4 = { w: 595.28, h: 841.89 };
+    const marginPt = img2pdfMarginMm * 2.8346;
+    if (img2pdfSize === "a4" && (A4.w - marginPt * 2 <= 0 || A4.h - marginPt * 2 <= 0)) {
+      throw new Error("余白が大きすぎます。A4に収まるよう小さい余白を選んでください。");
+    }
+    for (const f of img2pdfFiles) {
+      const img = f.type === "image/png"
+        ? await doc.embedPng(f.bytes)
+        : await doc.embedJpg(f.bytes);
+      if (img2pdfSize === "a4") {
+        const areaW = A4.w - marginPt * 2;
+        const areaH = A4.h - marginPt * 2;
+        const page = doc.addPage([A4.w, A4.h]);
+        const scale = Math.min(areaW / img.width, areaH / img.height);
+        const w = img.width * scale, h = img.height * scale;
+        page.drawImage(img, { x: (A4.w - w) / 2, y: (A4.h - h) / 2, width: w, height: h });
+      } else {
+        const page = doc.addPage([img.width + marginPt * 2, img.height + marginPt * 2]);
+        page.drawImage(img, { x: marginPt, y: marginPt, width: img.width, height: img.height });
+      }
+    }
+    const bytes = await doc.save();
+    const finalName = sanitizeFileName(img2pdfFilenameInput.value, `画像_${img2pdfFiles.length}枚`);
+    download(bytes, `${finalName}.pdf`, "application/pdf");
+    setStatus(img2pdfStatus, `完了 — ${img2pdfFiles.length}枚をPDFにしました(${fmtSize(bytes.length)})`, "ok");
+  } catch (e) {
+    setStatus(img2pdfStatus, e.message || "変換に失敗しました。", "err");
+  } finally {
+    img2pdfBtn.disabled = img2pdfFiles.length === 0;
+  }
+});
+
+/* ==================================================
+   PDF→JPEG
+================================================== */
+let pdf2imgFile = null;
+const pdf2imgInfo = document.getElementById("pdf2img-info");
+const pdf2imgFname = document.getElementById("pdf2img-fname");
+const pdf2imgPagesEl = document.getElementById("pdf2img-pages");
+const pdf2imgBtn = document.getElementById("pdf2img-btn");
+const pdf2imgStatus = document.getElementById("pdf2img-status");
+const pdf2imgFilenameInput = document.getElementById("pdf2img-filename");
+const pdf2imgFilenameExt = document.getElementById("pdf2img-filename-ext");
+let pdf2imgScale = 2;
+
+function pdf2imgAutoName(base, pageCount) {
+  return pageCount === 1 ? base : `${base}_画像`;
+}
+
+wireSeg(document.getElementById("pdf2img-scale"), d => { pdf2imgScale = parseFloat(d.scale); });
+
+wireDrop(
+  document.getElementById("pdf2img-drop"),
+  document.getElementById("pdf2img-input"),
+  async files => {
+    const f = files[0];
+    setStatus(pdf2imgStatus, "", "");
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      pdf2imgFile = { name: f.name, bytes, pageCount: doc.getPageCount() };
+      pdf2imgFname.textContent = f.name;
+      pdf2imgPagesEl.textContent = `全 ${pdf2imgFile.pageCount} ページ · ${fmtSize(f.size)}`;
+      pdf2imgInfo.hidden = false;
+      pdf2imgFilenameExt.textContent = pdf2imgFile.pageCount === 1 ? ".jpg" : ".zip";
+      pdf2imgFilenameInput.value = pdf2imgAutoName(baseName(f.name), pdf2imgFile.pageCount);
+    } catch (e) {
+      pdf2imgFile = null;
+      pdf2imgInfo.hidden = false;
+      pdf2imgFname.textContent = f.name;
+      pdf2imgPagesEl.textContent = "読み込み失敗";
+      setStatus(pdf2imgStatus, "このPDFを読み込めませんでした。", "err");
+    }
+  }
+);
+
+document.getElementById("pdf2img-clear").addEventListener("click", () => {
+  pdf2imgFile = null;
+  pdf2imgInfo.hidden = true;
+  pdf2imgFilenameInput.value = "";
+  setStatus(pdf2imgStatus, "", "");
+});
+
+pdf2imgBtn.addEventListener("click", async () => {
+  if (!pdf2imgFile) return;
+  pdf2imgBtn.disabled = true;
+  setStatus(pdf2imgStatus, "変換の準備中…", "busy");
+  try {
+    // pdf.js は渡した配列の所有権を取るため、コピーを渡す
+    const task = pdfjsLib.getDocument({ data: pdf2imgFile.bytes.slice() });
+    const pdf = await task.promise;
+    const base = baseName(pdf2imgFile.name);
+    const digits = String(pdf.numPages).length;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const single = pdf.numPages === 1;
+    const zip = single ? null : new JSZip();
+    let lastBlob = null;
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      setStatus(pdf2imgStatus, `変換中… ${i} / ${pdf.numPages}`, "busy");
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: pdf2imgScale });
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      // JPEGは透明を扱えないので白背景を敷く
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.92));
+      if (single) {
+        lastBlob = blob;
+      } else {
+        zip.file(`${base}_p${String(i).padStart(digits, "0")}.jpg`, blob);
+      }
+      await new Promise(r => setTimeout(r));
+    }
+
+    if (single) {
+      const finalName = sanitizeFileName(pdf2imgFilenameInput.value, pdf2imgAutoName(base, 1));
+      download(await lastBlob.arrayBuffer(), `${finalName}.jpg`, "image/jpeg");
+      setStatus(pdf2imgStatus, `完了 — 1ページをJPEGにしました(${fmtSize(lastBlob.size)})`, "ok");
+    } else {
+      const zipBytes = await zip.generateAsync({ type: "uint8array" });
+      const finalName = sanitizeFileName(pdf2imgFilenameInput.value, pdf2imgAutoName(base, pdf.numPages));
+      download(zipBytes, `${finalName}.zip`, "application/zip");
+      setStatus(pdf2imgStatus, `完了 — ${pdf.numPages}ページをJPEGにしてZIP保存しました(${fmtSize(zipBytes.length)})`, "ok");
+    }
+  } catch (e) {
+    setStatus(pdf2imgStatus, e.message || "変換に失敗しました。", "err");
+  } finally {
+    pdf2imgBtn.disabled = false;
+  }
+});
+
+/* ==================================================
+   OCR(検索可能PDF化)
+   スキャンしたPDFの各ページをpdf.jsで画像化 → Tesseract.jsで文字認識
+   → 認識した単語ごとの位置に、透明(opacity:0)なテキストを重ねて書き出す。
+   見た目は変わらないが、検索・コピーができるようになる。
+================================================== */
+const NOTO_SANS_JP_URL =
+  "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-jp@5.0.19/files/noto-sans-jp-japanese-400-normal.woff2";
+let ocrJapaneseFontBytes = null; // セッション内キャッシュ(タブごとに1回だけ取得)
+
+let ocrSrcBytes = null;
+let ocrName = "";
+let ocrPageCount = 0;
+let ocrLang = "jpn";
+let ocrScale = 2.5;
+
+const ocrInfo = document.getElementById("ocr-info");
+const ocrFname = document.getElementById("ocr-fname");
+const ocrPagesEl = document.getElementById("ocr-pages");
+const ocrBtn = document.getElementById("ocr-btn");
+const ocrClearBtn = document.getElementById("ocr-clear");
+const ocrStatus = document.getElementById("ocr-status");
+const ocrLoadStatus = document.getElementById("ocr-load-status");
+const ocrFilenameInput = document.getElementById("ocr-filename");
+
+wireSeg(document.getElementById("ocr-lang"), d => { ocrLang = d.lang; });
+wireSeg(document.getElementById("ocr-scale"), d => { ocrScale = parseFloat(d.scale); });
+
+wireDrop(
+  document.getElementById("ocr-drop"),
+  document.getElementById("ocr-input"),
+  async files => {
+    const f = files[0];
+    setStatus(ocrLoadStatus, "読み込み中…", "busy");
+    setStatus(ocrStatus, "", "");
+    ocrInfo.hidden = true;
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      ocrSrcBytes = bytes;
+      ocrName = f.name;
+      ocrPageCount = doc.getPageCount();
+      ocrFname.textContent = f.name;
+      ocrPagesEl.textContent = `全 ${ocrPageCount} ページ · ${fmtSize(f.size)}`;
+      ocrInfo.hidden = false;
+      setStatus(ocrLoadStatus, "", "");
+      ocrFilenameInput.value = `${baseName(f.name)}_検索可能`;
+    } catch (e) {
+      ocrSrcBytes = null;
+      ocrInfo.hidden = true;
+      setStatus(ocrLoadStatus, "このPDFを読み込めませんでした。暗号化または破損の可能性があります。", "err");
+    }
+  }
+);
+
+ocrClearBtn.addEventListener("click", () => {
+  ocrSrcBytes = null;
+  ocrInfo.hidden = true;
+  ocrFilenameInput.value = "";
+  setStatus(ocrStatus, "", "");
+  setStatus(ocrLoadStatus, "", "");
+});
+
+function ocrLangsArray(lang) {
+  return lang === "jpn+eng" ? ["jpn", "eng"] : [lang];
+}
+
+ocrBtn.addEventListener("click", async () => {
+  if (!ocrSrcBytes) return;
+  ocrBtn.disabled = true;
+  let worker = null;
+  try {
+    // 1. 出力用のPDFを読み込み、フォント埋め込みの準備をする
+    setStatus(ocrStatus, "準備中…", "busy");
+    const outDoc = await loadPdf(ocrSrcBytes);
+    outDoc.registerFontkit(fontkit);
+
+    if (!ocrJapaneseFontBytes) {
+      setStatus(ocrStatus, "日本語フォントを取得中…(初回のみ)", "busy");
+      const res = await fetch(NOTO_SANS_JP_URL);
+      if (!res.ok) throw new Error("フォントの取得に失敗しました。通信環境をご確認ください。");
+      ocrJapaneseFontBytes = await res.arrayBuffer();
+    }
+    const customFont = await outDoc.embedFont(ocrJapaneseFontBytes, { subset: true });
+
+    // 2. Tesseractワーカーを1つだけ作成し、全ページで使い回す
+    setStatus(ocrStatus, "OCRエンジンを準備中…(初回は言語データのダウンロードが入ります)", "busy");
+    worker = await Tesseract.createWorker(ocrLangsArray(ocrLang), 1, {
+      logger: m => {
+        if (m && m.status && typeof m.progress === "number") {
+          setStatus(ocrStatus, `${m.status} ${Math.round(m.progress * 100)}%`, "busy");
+        }
+      }
+    });
+
+    // 3. pdf.jsでページを画像化しながら、1ページずつOCR→透明テキストを重ねる
+    const task = pdfjsLib.getDocument({ data: ocrSrcBytes.slice() });
+    const pdfJsDoc = await task.promise;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    for (let i = 0; i < ocrPageCount; i++) {
+      setStatus(ocrStatus, `ページ画像を準備中… ${i + 1} / ${ocrPageCount}`, "busy");
+      const pjsPage = await pdfJsDoc.getPage(i + 1);
+      const viewport = pjsPage.getViewport({ scale: ocrScale });
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await pjsPage.render({ canvasContext: ctx, viewport }).promise;
+
+      setStatus(ocrStatus, `文字認識中… ${i + 1} / ${ocrPageCount}`, "busy");
+      const { data } = await worker.recognize(canvas, {}, { blocks: true });
+
+      const outPage = outDoc.getPage(i);
+      for (const w of (data.words || [])) {
+        const text = (w.text || "").trim();
+        if (!text) continue;
+        // pdf.jsのキャンバス座標 → PDFのページ座標(回転も自動で考慮される)
+        const [px0, py0] = viewport.convertToPdfPoint(w.bbox.x0, w.bbox.y0);
+        const [px1, py1] = viewport.convertToPdfPoint(w.bbox.x1, w.bbox.y1);
+        const left = Math.min(px0, px1);
+        const bottom = Math.min(py0, py1);
+        const boxW = Math.abs(px1 - px0);
+        const boxH = Math.abs(py1 - py0);
+        if (boxW <= 0 || boxH <= 0) continue;
+        let size = boxH * 0.85;
+        if (!isFinite(size) || size < 1) size = 1;
+        try {
+          // 横幅を認識ボックスに合わせて、見た目の位置ズレを抑える
+          const natWidth = customFont.widthOfTextAtSize(text, size) || 1;
+          if (natWidth > 0 && boxW > 0) {
+            const hScale = boxW / natWidth;
+            if (hScale > 0.2 && hScale < 5) size = size; // サイズはそのまま、幅はdrawText非対応のため許容範囲のズレは無視
+          }
+          outPage.drawText(text, {
+            x: left,
+            y: bottom,
+            size,
+            font: customFont,
+            opacity: 0 // 見た目には出さず、検索・コピー用のテキストとしてのみ埋め込む
+          });
+        } catch (wordErr) {
+          // フォントに無い文字などは1単語だけスキップして続行
+        }
+      }
+      await new Promise(r => setTimeout(r));
+    }
+
+    setStatus(ocrStatus, "PDFを生成中…", "busy");
+    const bytes = await outDoc.save();
+    const finalName = sanitizeFileName(ocrFilenameInput.value, `${baseName(ocrName)}_検索可能`);
+    download(bytes, `${finalName}.pdf`, "application/pdf");
+    setStatus(ocrStatus, `完了 — ${ocrPageCount}ページを検索可能PDFにしました(${fmtSize(bytes.length)})`, "ok");
+  } catch (e) {
+    setStatus(ocrStatus, e.message || "OCR処理に失敗しました。", "err");
+  } finally {
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
+    ocrBtn.disabled = false;
+  }
+});
+
+/* ==================================================
+   PDF→Markdown
+   pdf.jsでテキストを座標つきで取り出し、
+     ・y座標の近さで「行」にまとめる
+     ・行間隔の中央値より大きく空いていたら段落区切り
+     ・本文文字サイズ(文字数加重の最頻値)より一定以上大きい行を見出しとみなす
+   というヒューリスティックでMarkdownに変換する。表・図・段組みは考慮しない簡易版。
+================================================== */
+const mdInfo = document.getElementById("md-info");
+const mdFname = document.getElementById("md-fname");
+const mdPagesEl = document.getElementById("md-pages");
+const mdBtn = document.getElementById("md-btn");
+const mdClearBtn = document.getElementById("md-clear");
+const mdStatus = document.getElementById("md-status");
+const mdLoadStatus = document.getElementById("md-load-status");
+const mdResult = document.getElementById("md-result");
+const mdOutput = document.getElementById("md-output");
+const mdCopyBtn = document.getElementById("md-copy");
+const mdDownloadBtn = document.getElementById("md-download");
+const mdPagebreakChk = document.getElementById("md-pagebreak");
+const mdFilenameInput = document.getElementById("md-filename");
+
+let mdFile = null;
+let mdThreshold = 1.18; // 標準
+
+wireSeg(document.getElementById("md-sensitivity"), d => { mdThreshold = parseFloat(d.th); });
+
+wireDrop(
+  document.getElementById("md-drop"),
+  document.getElementById("md-input"),
+  async files => {
+    const f = files[0];
+    setStatus(mdLoadStatus, "読み込み中…", "busy");
+    setStatus(mdStatus, "", "");
+    mdInfo.hidden = true;
+    mdResult.hidden = true;
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      mdFile = { name: f.name, bytes, pageCount: doc.getPageCount() };
+      mdFname.textContent = f.name;
+      mdPagesEl.textContent = `全 ${mdFile.pageCount} ページ · ${fmtSize(f.size)}`;
+      mdInfo.hidden = false;
+      setStatus(mdLoadStatus, "", "");
+    } catch (e) {
+      mdFile = null;
+      setStatus(mdLoadStatus, "このPDFを読み込めませんでした。暗号化または破損の可能性があります。", "err");
+    }
+  }
+);
+
+mdClearBtn.addEventListener("click", () => {
+  mdFile = null;
+  mdInfo.hidden = true;
+  mdResult.hidden = true;
+  mdFilenameInput.value = "";
+  setStatus(mdStatus, "", "");
+  setStatus(mdLoadStatus, "", "");
+});
+
+const CJK_RE = /[\u3000-\u30FF\u3400-\u9FFF\uFF00-\uFFEF]/;
+
+async function convertPdfToMarkdown(bytes, threshold, includePageBreaks, onProgress) {
+  const task = pdfjsLib.getDocument({ data: bytes.slice() });
+  const pdf = await task.promise;
+  const pagesLines = [];
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    if (onProgress) onProgress(i, pdf.numPages);
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+
+    const rawLines = [];
+    let cur = null;
+    for (const it of content.items) {
+      if (typeof it.str !== "string") continue;
+      const size = Math.hypot(it.transform[2], it.transform[3]) || Math.abs(it.transform[3]) || 1;
+      const y = it.transform[5];
+      if (!it.str.trim() && !cur) continue;
+      if (cur && Math.abs(y - cur.y) <= Math.max(2, size * 0.55)) {
+        cur.text += it.str;
+        cur.size = Math.max(cur.size, size);
+      } else {
+        if (cur) rawLines.push(cur);
+        cur = { text: it.str, size, y };
+      }
+    }
+    if (cur) rawLines.push(cur);
+
+    const lines = rawLines
+      .map(l => ({ ...l, text: l.text.replace(/\s+$/, "").trim() }))
+      .filter(l => l.text.length > 0);
+    pagesLines.push(lines);
+    await new Promise(r => setTimeout(r));
+  }
+
+  // 本文サイズ = 文字数で重みづけした最頻サイズ(0.5pt刻み)
+  const sizeWeight = new Map();
+  for (const lines of pagesLines) {
+    for (const l of lines) {
+      const key = Math.round(l.size * 2) / 2;
+      sizeWeight.set(key, (sizeWeight.get(key) || 0) + l.text.length);
+    }
+  }
+  let bodySize = 10, bestWeight = -1;
+  for (const [size, w] of sizeWeight) {
+    if (w > bestWeight) { bestWeight = w; bodySize = size; }
+  }
+  if (bestWeight <= 0) bodySize = 10;
+
+  const out = [];
+  pagesLines.forEach((lines, pageIdx) => {
+    if (pageIdx > 0 && includePageBreaks) out.push("", "---", "");
+
+    const gaps = [];
+    for (let i = 1; i < lines.length; i++) gaps.push(Math.abs(lines[i - 1].y - lines[i].y));
+    gaps.sort((a, b) => a - b);
+    const medianGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
+
+    let paraBuf = "";
+    const flush = () => {
+      if (paraBuf) { out.push(paraBuf); out.push(""); paraBuf = ""; }
+    };
+
+    lines.forEach((l, idx) => {
+      const ratio = l.size / bodySize;
+      let level = 0;
+      if (ratio >= threshold * 1.5) level = 1;
+      else if (ratio >= threshold * 1.22) level = 2;
+      else if (ratio >= threshold) level = 3;
+
+      if (level > 0) {
+        flush();
+        out.push("#".repeat(level) + " " + l.text);
+        out.push("");
+        return;
+      }
+
+      const gapBefore = idx > 0 ? Math.abs(l.y - lines[idx - 1].y) : 0;
+      const isNewPara = idx === 0 || (medianGap > 0 && gapBefore > medianGap * 1.6);
+
+      if (isNewPara) {
+        flush();
+        paraBuf = l.text;
+      } else {
+        const lastCh = paraBuf.slice(-1);
+        const firstCh = l.text.slice(0, 1);
+        paraBuf += (!lastCh || CJK_RE.test(lastCh) || CJK_RE.test(firstCh)) ? l.text : " " + l.text;
+      }
+    });
+    flush();
+  });
+
+  while (out.length && out[out.length - 1] === "") out.pop();
+  return out.join("\n");
+}
+
+mdBtn.addEventListener("click", async () => {
+  if (!mdFile) return;
+  mdBtn.disabled = true;
+  mdResult.hidden = true;
+  setStatus(mdStatus, "変換中…", "busy");
+  try {
+    const md = await convertPdfToMarkdown(
+      mdFile.bytes,
+      mdThreshold,
+      mdPagebreakChk.checked,
+      (i, total) => setStatus(mdStatus, `テキストを読み取り中… ${i} / ${total} ページ`, "busy")
+    );
+    mdOutput.value = md || "(テキストを抽出できませんでした。画像だけのPDFの可能性があります。先にOCRタブで検索可能PDF化してからお試しください。)";
+    mdResult.hidden = false;
+    mdFilenameInput.value = baseName(mdFile.name);
+    setStatus(mdStatus, `完了 — ${mdFile.pageCount}ページからMarkdownを生成しました`, "ok");
+  } catch (e) {
+    setStatus(mdStatus, e.message || "変換に失敗しました。", "err");
+  } finally {
+    mdBtn.disabled = false;
+  }
+});
+
+mdCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(mdOutput.value);
+    setStatus(mdStatus, "クリップボードにコピーしました", "ok");
+  } catch (e) {
+    mdOutput.focus();
+    mdOutput.select();
+    setStatus(mdStatus, "自動コピーできなかったため選択状態にしました。Ctrl/Cmd+Cでコピーしてください。", "err");
+  }
+});
+
+mdDownloadBtn.addEventListener("click", () => {
+  if (!mdFile) return;
+  const bytes = new TextEncoder().encode(mdOutput.value);
+  const finalName = sanitizeFileName(mdFilenameInput.value, baseName(mdFile.name));
+  download(bytes, `${finalName}.md`, "text/markdown");
+});
+
+/* ==================================================
+   PDF編集(注釈・テキスト追加)
+   pdf.jsでページをキャンバスに描画し、クリックした位置をviewport.convertToPdfPoint()で
+   PDF座標に変換して保存(ページの回転もこの変換で自動的に吸収される。OCR機能と同じ考え方)。
+   書き出し時はpdf-lib + 日本語フォント(NOTO_SANS_JP_URL、OCR機能とキャッシュ共用)で
+   page.drawText()により新しいテキストを重ねて描く。既存文字の書き換えは非対応。
+================================================== */
+let annotSrcBytes = null;
+let annotName = "";
+let annotPageCount = 0;
+let annotPdfJsDoc = null;
+let annotCurrentPage = 1;
+let annotViewport = null;
+let annotFontSize = 16;
+let annotColor = "#22303c";
+let annotIdSeq = 1;
+let annotations = []; // { id, page, x, y, text, size, color }  x,y はPDF座標(ベースライン)
+
+const annotEditor = document.getElementById("annotate-editor");
+const annotFname = document.getElementById("annotate-fname");
+const annotPagesLabelTop = document.getElementById("annotate-pages-label");
+const annotLoadStatus = document.getElementById("annotate-load-status");
+const annotStatus = document.getElementById("annotate-status");
+const annotCanvasWrap = document.getElementById("annot-canvas-wrap");
+const annotCanvas = document.getElementById("annot-canvas");
+const annotOverlay = document.getElementById("annot-overlay");
+const annotPrevBtn = document.getElementById("annot-prev");
+const annotNextBtn = document.getElementById("annot-next");
+const annotPageLabel = document.getElementById("annot-page-label");
+const annotSaveBtn = document.getElementById("annot-save-btn");
+const annotClearAllBtn = document.getElementById("annot-clear-all");
+const annotClearBtn = document.getElementById("annotate-clear");
+const annotColorInput = document.getElementById("annot-color");
+const annotFilenameInput = document.getElementById("annotate-filename");
+
+wireSeg(document.getElementById("annot-size"), d => { annotFontSize = parseFloat(d.size); });
+annotColorInput.addEventListener("input", () => { annotColor = annotColorInput.value; });
+
+wireDrop(
+  document.getElementById("annotate-drop"),
+  document.getElementById("annotate-input"),
+  async files => {
+    const f = files[0];
+    setStatus(annotLoadStatus, "読み込み中…", "busy");
+    setStatus(annotStatus, "", "");
+    annotEditor.hidden = true;
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const doc = await loadPdf(bytes);
+      annotSrcBytes = bytes;
+      annotName = f.name;
+      annotPageCount = doc.getPageCount();
+      annotations = [];
+      annotCurrentPage = 1;
+
+      annotFname.textContent = f.name;
+      annotPagesLabelTop.textContent = `全 ${annotPageCount} ページ · ${fmtSize(f.size)}`;
+      annotEditor.hidden = false;
+      setStatus(annotLoadStatus, "", "");
+      annotFilenameInput.value = `${baseName(f.name)}_編集済`;
+
+      const task = pdfjsLib.getDocument({ data: bytes.slice() });
+      annotPdfJsDoc = await task.promise;
+      await renderAnnotPage(1);
+    } catch (e) {
+      annotSrcBytes = null;
+      annotPdfJsDoc = null;
+      annotEditor.hidden = true;
+      setStatus(annotLoadStatus, "このPDFを読み込めませんでした。暗号化または破損の可能性があります。", "err");
+    }
+  }
+);
+
+annotClearBtn.addEventListener("click", () => {
+  annotSrcBytes = null;
+  annotPdfJsDoc = null;
+  annotations = [];
+  annotEditor.hidden = true;
+  annotFilenameInput.value = "";
+  setStatus(annotStatus, "", "");
+  setStatus(annotLoadStatus, "", "");
+});
+
+annotClearAllBtn.addEventListener("click", () => {
+  if (!annotations.length) return;
+  annotations = [];
+  renderAnnotOverlay();
+  setStatus(annotStatus, "すべての注釈を削除しました", "");
+});
+
+annotPrevBtn.addEventListener("click", () => {
+  if (annotCurrentPage > 1) renderAnnotPage(annotCurrentPage - 1);
+});
+annotNextBtn.addEventListener("click", () => {
+  if (annotCurrentPage < annotPageCount) renderAnnotPage(annotCurrentPage + 1);
+});
+
+async function renderAnnotPage(n) {
+  annotCurrentPage = n;
+  const page = await annotPdfJsDoc.getPage(n);
+  const baseVp = page.getViewport({ scale: 1 });
+  const mainEl = document.querySelector("main");
+  const targetWidth = Math.min(700, (mainEl && mainEl.clientWidth) || 700);
+  const scale = targetWidth / baseVp.width;
+  const vp = page.getViewport({ scale });
+  annotViewport = vp;
+
+  annotCanvas.width = Math.ceil(vp.width);
+  annotCanvas.height = Math.ceil(vp.height);
+  annotCanvas.style.width = vp.width + "px";
+  annotCanvas.style.height = vp.height + "px";
+  annotOverlay.style.width = vp.width + "px";
+  annotOverlay.style.height = vp.height + "px";
+  annotCanvasWrap.style.width = vp.width + "px";
+
+  const ctx = annotCanvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, annotCanvas.width, annotCanvas.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+  annotPageLabel.textContent = `${n} / ${annotPageCount} ページ`;
+  annotPrevBtn.disabled = n <= 1;
+  annotNextBtn.disabled = n >= annotPageCount;
+  renderAnnotOverlay();
+}
+
+// キャンバス(オーバーレイの空白部分)クリックで新規テキストを追加
+annotOverlay.addEventListener("click", e => {
+  if (e.target !== annotOverlay) return; // 既存の注釈やボタン上のクリックは無視
+  const rect = annotOverlay.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  const [px, py] = annotViewport.convertToPdfPoint(cx, cy);
+  const id = "a" + (annotIdSeq++);
+  annotations.push({ id, page: annotCurrentPage, x: px, y: py, text: "テキスト", size: annotFontSize, color: annotColor });
+  renderAnnotOverlay();
+  requestAnimationFrame(() => {
+    const el = annotOverlay.querySelector(`[data-annot-id="${id}"] .annot-text`);
+    if (el) {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+});
+
+function renderAnnotOverlay() {
+  annotOverlay.innerHTML = "";
+  if (!annotViewport) return;
+  annotations
+    .filter(a => a.page === annotCurrentPage)
+    .forEach(a => {
+      const [vx, vy] = annotViewport.convertToViewportPoint(a.x, a.y);
+
+      const box = document.createElement("div");
+      box.className = "annot-box";
+      box.dataset.annotId = a.id;
+      box.style.left = vx + "px";
+      box.style.top = vy + "px";
+
+      const handle = document.createElement("span");
+      handle.className = "annot-handle";
+      handle.textContent = "⠿";
+      handle.title = "ドラッグで移動";
+
+      const txt = document.createElement("div");
+      txt.className = "annot-text";
+      txt.contentEditable = "true";
+      txt.spellcheck = false;
+      txt.style.fontSize = (a.size * annotViewport.scale) + "px";
+      txt.style.color = a.color;
+      txt.textContent = a.text;
+      txt.addEventListener("mousedown", ev => ev.stopPropagation());
+      txt.addEventListener("click", ev => ev.stopPropagation());
+      txt.addEventListener("input", () => { a.text = txt.textContent; });
+      txt.addEventListener("keydown", ev => {
+        if (ev.key === "Enter") { ev.preventDefault(); txt.blur(); }
+      });
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "annot-del";
+      del.textContent = "✕";
+      del.title = "この注釈を削除";
+      del.addEventListener("mousedown", ev => ev.stopPropagation());
+      del.addEventListener("click", ev => {
+        ev.stopPropagation();
+        annotations = annotations.filter(x => x.id !== a.id);
+        renderAnnotOverlay();
+      });
+
+      handle.addEventListener("mousedown", ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const startX = ev.clientX, startY = ev.clientY;
+        const origLeft = parseFloat(box.style.left), origTop = parseFloat(box.style.top);
+        function onMove(mv) {
+          box.style.left = (origLeft + (mv.clientX - startX)) + "px";
+          box.style.top = (origTop + (mv.clientY - startY)) + "px";
+        }
+        function onUp() {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          const finalLeft = parseFloat(box.style.left);
+          const finalTop = parseFloat(box.style.top);
+          const [px, py] = annotViewport.convertToPdfPoint(finalLeft, finalTop);
+          a.x = px;
+          a.y = py;
+        }
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
+
+      box.append(handle, txt, del);
+      annotOverlay.appendChild(box);
+    });
+}
+
+function hexToRgb01(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+  if (!m) return { r: 0.13, g: 0.19, b: 0.24 };
+  return { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 };
+}
+
+annotSaveBtn.addEventListener("click", async () => {
+  if (!annotSrcBytes) return;
+  const valid = annotations.filter(a => a.text && a.text.trim());
+  if (!valid.length) {
+    setStatus(annotStatus, "書き込む注釈がありません。キャンバス上をクリックして追加してください。", "err");
+    return;
+  }
+  annotSaveBtn.disabled = true;
+  try {
+    setStatus(annotStatus, "準備中…", "busy");
+    const outDoc = await loadPdf(annotSrcBytes);
+    outDoc.registerFontkit(fontkit);
+
+    if (!ocrJapaneseFontBytes) {
+      setStatus(annotStatus, "日本語フォントを取得中…(初回のみ)", "busy");
+      const res = await fetch(NOTO_SANS_JP_URL);
+      if (!res.ok) throw new Error("フォントの取得に失敗しました。通信環境をご確認ください。");
+      ocrJapaneseFontBytes = await res.arrayBuffer();
+    }
+    const customFont = await outDoc.embedFont(ocrJapaneseFontBytes, { subset: true });
+
+    setStatus(annotStatus, "書き込み中…", "busy");
+    for (const a of valid) {
+      const outPage = outDoc.getPage(a.page - 1);
+      const { r, g, b } = hexToRgb01(a.color);
+      const lines = a.text.split("\n");
+      lines.forEach((line, li) => {
+        if (!line) return;
+        try {
+          outPage.drawText(line, {
+            x: a.x,
+            y: a.y - li * a.size * 1.3,
+            size: a.size,
+            font: customFont,
+            color: rgb(r, g, b)
+          });
+        } catch (lineErr) {
+          // フォントに無い文字などが含まれる行のみスキップして続行
+        }
+      });
+    }
+
+    setStatus(annotStatus, "PDFを生成中…", "busy");
+    const bytes = await outDoc.save();
+    const finalName = sanitizeFileName(annotFilenameInput.value, `${baseName(annotName)}_編集済`);
+    download(bytes, `${finalName}.pdf`, "application/pdf");
+    setStatus(annotStatus, `完了 — ${valid.length}件の注釈を書き込みました(${fmtSize(bytes.length)})`, "ok");
+  } catch (e) {
+    setStatus(annotStatus, e.message || "書き込みに失敗しました。", "err");
+  } finally {
+    annotSaveBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>契約書台帳 — OCR抽出ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: #EDE9D8;
+    --paper-dark: #E3DEC8;
+    --ink: #1E2A22;
+    --ink-soft: #4B5A4E;
+    --rule: #2F5233;
+    --rule-faint: rgba(47,82,51,0.28);
+    --amber: #C9820A;
+    --amber-bg: #F6E3B8;
+    --red: #A33B2E;
+    --red-bg: #F3D9D2;
+    --blue: #2E5C8A;
+    --blue-bg: #D8E4F0;
+    --card: #F7F4E9;
+    --shadow: 0 2px 0 rgba(30,42,34,0.12);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    background-image:
+      repeating-linear-gradient(to bottom, transparent, transparent 37px, var(--rule-faint) 38px);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    min-height:100vh;
+    padding-bottom:80px;
+  }
+  header{
+    padding:28px 24px 18px;
+    border-bottom:3px double var(--rule);
+    background:linear-gradient(to bottom, var(--paper-dark), var(--paper));
+  }
+  header h1{
+    font-family:'Shippori Mincho', serif;
+    font-weight:700;
+    font-size:26px;
+    margin:0 0 6px;
+    letter-spacing:0.04em;
+  }
+  header h1 .sub{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    font-weight:500;
+    color:var(--ink-soft);
+    margin-left:10px;
+  }
+  header p{
+    margin:4px 0 0;
+    font-size:13.5px;
+    color:var(--ink-soft);
+    line-height:1.7;
+    max-width:760px;
+  }
+  .privacy-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    margin-top:10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    color:var(--rule);
+    border:1px solid var(--rule);
+    padding:3px 10px;
+    border-radius:2px;
+    background:rgba(47,82,51,0.06);
+  }
+  main{
+    max-width:1080px;
+    margin:0 auto;
+    padding:22px 24px 0;
+  }
+  .section-title{
+    font-family:'Shippori Mincho', serif;
+    font-size:17px;
+    font-weight:700;
+    margin:0 0 4px;
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+  }
+  .section-title .step{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    color:#fff;
+    background:var(--rule);
+    padding:1px 8px;
+    border-radius:2px;
+  }
+  .section-hint{
+    font-size:12.5px;
+    color:var(--ink-soft);
+    margin-bottom:12px;
+  }
+  .card{
+    background:var(--card);
+    border:1px solid var(--rule-faint);
+    box-shadow:var(--shadow);
+    border-radius:3px;
+    padding:20px;
+  }
+  .uploader{
+    display:flex;
+    align-items:center;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  .uploader input[type=file]{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+  }
+  button{
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    font-weight:700;
+    font-size:13.5px;
+    cursor:pointer;
+    border-radius:2px;
+    border:1px solid var(--rule);
+    background:var(--rule);
+    color:var(--paper);
+    padding:9px 16px;
+    transition:transform 0.08s ease, opacity 0.15s ease;
+  }
+  button:hover:not(:disabled){transform:translateY(-1px);}
+  button:disabled{opacity:0.4; cursor:not-allowed;}
+  button.ghost{background:transparent; color:var(--rule);}
+  button.small{padding:5px 10px; font-size:12px;}
+  .status-line{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    margin-left:auto;
+  }
+  #progressWrap{margin-top:14px; display:none;}
+  .progress-bar{
+    height:6px; width:100%; background:var(--paper-dark);
+    border-radius:3px; overflow:hidden; border:1px solid var(--rule-faint);
+  }
+  .progress-fill{height:100%; width:0%; background:var(--rule); transition:width 0.25s ease;}
+  .progress-label{font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--ink-soft); margin-top:6px;}
+
+  .block{margin-top:28px; display:none;}
+
+  /* Page role picker */
+  .thumb-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+    gap:12px;
+  }
+  .thumb-card{
+    background:#fff;
+    border:1px solid var(--rule-faint);
+    border-radius:3px;
+    overflow:hidden;
+  }
+  .thumb-card img{width:100%; display:block; border-bottom:1px solid var(--rule-faint);}
+  .thumb-card .thumb-label{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px; color:var(--ink-soft);
+    padding:5px 7px 2px;
+  }
+  .thumb-card select{
+    width:100%;
+    font-family:'Zen Kaku Gothic New', sans-serif;
+    font-size:12px;
+    padding:6px 5px;
+    border:none;
+    border-top:1px solid var(--rule-faint);
+    background:var(--paper-dark);
+  }
+  .thumb-card.role-basic{outline:2px solid var(--amber);}
+  .thumb-card.role-license{outline:2px solid var(--blue);}
+
+  .license-file-preview{
+    display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;
+  }
+  .license-file-preview img{
+    height:120px; border:1px solid var(--rule-faint); border-radius:2px;
+  }
+
+  /* Ledger summary */
+  .ledger-title{
+    font-family:'Shippori Mincho', serif; font-size:19px; font-weight:700;
+    display:flex; align-items:baseline; gap:8px; margin-bottom:4px;
+  }
+  .ledger-title .stamp{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--red);
+    border:1.5px solid var(--red); padding:1px 6px; border-radius:2px;
+    transform:rotate(-3deg); display:inline-block;
+  }
+  table.ledger{width:100%; border-collapse:collapse; background:var(--card); box-shadow:var(--shadow);}
+  table.ledger th{
+    font-family:'IBM Plex Mono', monospace; font-size:11.5px; text-align:left;
+    color:var(--ink-soft); font-weight:500; padding:8px 10px;
+    border-bottom:2px solid var(--rule); background:var(--paper-dark); white-space:nowrap;
+  }
+  table.ledger td{padding:9px 10px; border-bottom:1px solid var(--rule-faint); vertical-align:top;}
+  .field-label{
+    font-family:'Shippori Mincho', serif; font-weight:700; font-size:14.5px;
+    white-space:nowrap; padding-top:11px !important;
+  }
+  select.candidate-select, input.candidate-input{
+    font-family:'IBM Plex Mono', monospace; font-size:13.5px; width:100%;
+    padding:6px 8px; border:1px solid var(--rule-faint); border-radius:2px;
+    background:#fff; color:var(--ink);
+  }
+  .found-tag{
+    display:inline-block; font-family:'IBM Plex Mono', monospace; font-size:10.5px;
+    margin-top:5px; padding:1px 6px; border-radius:2px;
+  }
+  .found-tag.ok{background:var(--amber-bg); color:#7A5205;}
+  .found-tag.none{background:var(--red-bg); color:var(--red);}
+  .copy-row{display:flex; justify-content:flex-end; gap:8px; margin-top:12px;}
+
+  /* Page tabs (detail check) */
+  .tabs{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;}
+  .tab{
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px; padding:6px 12px;
+    border:1px solid var(--rule-faint); border-radius:2px; background:var(--card);
+    cursor:pointer; color:var(--ink-soft); display:flex; align-items:center; gap:5px;
+  }
+  .tab.active{background:var(--rule); color:var(--paper); border-color:var(--rule);}
+  .tab .dot{width:7px;height:7px;border-radius:50%; background:#bbb; display:inline-block;}
+  .tab .dot.processing{background:var(--amber); animation:pulse 1s infinite;}
+  .tab .dot.done{background:var(--rule);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+
+  .page-detail{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media (max-width: 800px){.page-detail{grid-template-columns:1fr;}}
+  .page-card{background:var(--card); border:1px solid var(--rule-faint); box-shadow:var(--shadow); padding:14px; border-radius:3px;}
+  .page-card h3{font-family:'IBM Plex Mono', monospace; font-size:12.5px; color:var(--ink-soft); margin:0 0 8px; text-transform:uppercase; letter-spacing:0.05em;}
+  .page-card img{width:100%; border:1px solid var(--rule-faint); display:block;}
+  .ocr-text{
+    font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1.8;
+    white-space:pre-wrap; word-break:break-all; max-height:420px; overflow-y:auto;
+    background:#fff; border:1px solid var(--rule-faint); padding:10px; border-radius:2px;
+  }
+  .ocr-text mark{background:var(--amber-bg); color:#5b3c00; border-radius:2px; padding:0 1px;}
+  .candidates-mini{margin-top:10px; font-size:12.5px;}
+  .candidates-mini div{margin-bottom:4px;}
+  .candidates-mini b{font-family:'IBM Plex Mono', monospace; color:var(--ink-soft); font-weight:500;}
+
+  footer{
+    max-width:1080px; margin:40px auto 0; padding:14px 24px 30px;
+    font-size:11.5px; color:var(--ink-soft); border-top:1px solid var(--rule-faint);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>契約書台帳<span class="sub">CONTRACT LEDGER — OCR EXTRACTION</span></h1>
+  <p>スキャン画像として保存された契約書PDF(文字が選択できないもの)から、氏名・住所・電話番号・免許証番号・交付年月日をOCRで読み取り、候補を自動抽出します。処理するページはご自身で選べます。免許証だけ別の写真・PDFで持っている場合も、そのまま読み込めます。</p>
+  <div class="privacy-badge">🔒 全処理ブラウザ内で完結・外部サーバーへの送信なし</div>
+</header>
+
+<main>
+
+  <div class="section-title"><span class="step">1</span>契約書PDFを読み込む</div>
+  <div class="section-hint">まずページの一覧だけを表示します(OCRはまだ実行しません)。</div>
+  <div class="card uploader">
+    <input type="file" id="fileInput" accept="application/pdf">
+    <button id="loadBtn" disabled>ページを読み込む</button>
+    <span class="status-line" id="statusLine">契約書PDFを選択してください</span>
+  </div>
+
+  <div class="block" id="roleBlock">
+    <div class="section-title" style="margin-top:26px;"><span class="step">2</span>各ページの種類を指定する</div>
+    <div class="section-hint">名前・住所・電話番号がまとまっているページは「基本情報ページ」、免許証のコピーが写っているページは「免許証ページ」を選んでください。関係ないページは「対象外」のままでOK(OCRされません＝処理が速くなります)。</div>
+    <div class="card">
+      <div class="thumb-grid" id="thumbGrid"></div>
+    </div>
+  </div>
+
+  <div class="block" id="licenseFileBlock" style="display:block; margin-top:28px;">
+    <div class="section-title"><span class="step">+</span>免許証を別ファイルで読み込む（任意）</div>
+    <div class="section-hint">免許証のコピーが契約書に含まれておらず、別の写真やPDFで保管している場合はここに追加できます。ページ種類は自動的に「免許証」として扱われます。</div>
+    <div class="card uploader">
+      <input type="file" id="licenseFileInput" accept="application/pdf,image/*">
+      <button id="loadLicenseBtn" disabled>免許証ファイルを読み込む</button>
+      <span class="status-line" id="licenseStatusLine"></span>
+    </div>
+    <div class="license-file-preview" id="licenseFilePreview"></div>
+  </div>
+
+  <div class="block" id="ocrStartBlock" style="margin-top:26px;">
+    <div class="card uploader">
+      <button id="startBtn" disabled>選択したページのOCRを開始</button>
+      <span class="status-line" id="ocrStatusLine">基本情報ページ・免許証ページを1つ以上指定してください</span>
+    </div>
+    <div id="progressWrap">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-label" id="progressLabel"></div>
+    </div>
+  </div>
+
+  <section class="block" id="summarySection">
+    <div class="ledger-title">抽出サマリー <span class="stamp">確認要</span></div>
+    <div class="section-hint">各項目は自動検出された候補です。プルダウンで別の候補を選ぶか、直接書き換えて修正してください。</div>
+    <table class="ledger">
+      <thead><tr><th style="width:110px;">項目</th><th>値（編集可）</th><th style="width:70px;">検出元</th><th style="width:60px;"></th></tr></thead>
+      <tbody id="ledgerBody"></tbody>
+    </table>
+    <div class="copy-row">
+      <button class="ghost small" id="copyTsvBtn">タブ区切りでコピー（表計算に貼り付け用）</button>
+      <button class="small" id="copyLabeledBtn">項目名付きでコピー</button>
+    </div>
+  </section>
+
+  <section class="block" id="pagesSection">
+    <div class="section-title" style="margin-top:10px;">ページ別 確認</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="page-detail" id="pageDetail"></div>
+  </section>
+
+</main>
+
+<footer>
+  免許証番号・電話番号・住所などの個人情報を扱うため、このツールはデータを一切外部送信・保存しません(ページを閉じると消えます)。読み取り結果は必ず原本と照合のうえ台帳・システムへ転記してください。OCR精度は原本の印字品質に左右されるため、数字の誤読(0/8、1/7 など)に特にご注意ください。
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+
+const fileInput = document.getElementById('fileInput');
+const loadBtn = document.getElementById('loadBtn');
+const statusLine = document.getElementById('statusLine');
+
+const licenseFileInput = document.getElementById('licenseFileInput');
+const loadLicenseBtn = document.getElementById('loadLicenseBtn');
+const licenseStatusLine = document.getElementById('licenseStatusLine');
+const licenseFilePreview = document.getElementById('licenseFilePreview');
+
+const roleBlock = document.getElementById('roleBlock');
+const thumbGrid = document.getElementById('thumbGrid');
+const ocrStartBlock = document.getElementById('ocrStartBlock');
+const startBtn = document.getElementById('startBtn');
+const ocrStatusLine = document.getElementById('ocrStatusLine');
+
+const progressWrap = document.getElementById('progressWrap');
+const progressFill = document.getElementById('progressFill');
+const progressLabel = document.getElementById('progressLabel');
+
+const summarySection = document.getElementById('summarySection');
+const pagesSection = document.getElementById('pagesSection');
+const ledgerBody = document.getElementById('ledgerBody');
+const tabsEl = document.getElementById('tabs');
+const pageDetail = document.getElementById('pageDetail');
+
+let mainFile = null;
+let licenseFile = null;
+let pages = [];        // from main contract PDF: {num, imgData, role:'skip'|'basic'|'license', text, status, candidates}
+let licensePages = [];  // from separate license file: {num, imgData, role:'license', text, status, candidates}
+let activeTab = 0;
+let combinedForTabs = []; // built after OCR, references into pages/licensePages with a display label
+
+// ---------- file selection ----------
+fileInput.addEventListener('change', () => {
+  mainFile = fileInput.files[0] || null;
+  loadBtn.disabled = !mainFile;
+  statusLine.textContent = mainFile ? `${mainFile.name} を選択中` : '契約書PDFを選択してください';
+});
+
+licenseFileInput.addEventListener('change', () => {
+  licenseFile = licenseFileInput.files[0] || null;
+  loadLicenseBtn.disabled = !licenseFile;
+  licenseStatusLine.textContent = licenseFile ? `${licenseFile.name} を選択中` : '';
+});
+
+loadBtn.addEventListener('click', async () => {
+  if(!mainFile) return;
+  loadBtn.disabled = true;
+  statusLine.textContent = 'ページを画像に変換中…';
+  pages = await renderPdfToPages(mainFile);
+  pages.forEach(p => p.role = 'skip');
+  statusLine.textContent = `${pages.length}ページを読み込みました。各ページの種類を指定してください。`;
+  renderThumbGrid();
+  roleBlock.style.display = 'block';
+  ocrStartBlock.style.display = 'block';
+  loadBtn.disabled = false;
+  updateStartAvailability();
+});
+
+loadLicenseBtn.addEventListener('click', async () => {
+  if(!licenseFile) return;
+  loadLicenseBtn.disabled = true;
+  licenseStatusLine.textContent = '読み込み中…';
+  if(licenseFile.type === 'application/pdf'){
+    licensePages = await renderPdfToPages(licenseFile);
+  } else {
+    // image file
+    const imgData = await fileToDataUrl(licenseFile);
+    licensePages = [{num: 1, imgData, status: 'pending', text: '', candidates: emptyLicenseCandidates()}];
+  }
+  licensePages.forEach(p => { p.role = 'license'; p.candidates = emptyLicenseCandidates(); });
+  licenseFilePreview.innerHTML = licensePages.map(p => `<img src="${p.imgData}" alt="license page ${p.num}">`).join('');
+  licenseStatusLine.textContent = `${licensePages.length}ページを読み込みました（免許証として処理されます）`;
+  loadLicenseBtn.disabled = false;
+  ocrStartBlock.style.display = 'block';
+  updateStartAvailability();
+});
+
+async function renderPdfToPages(file){
+  const arrayBuf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: arrayBuf}).promise;
+  const result = [];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({scale: 2.2});
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({canvasContext: ctx, viewport}).promise;
+    result.push({num:i, imgData: canvas.toDataURL('image/png'), text:'', status:'pending', candidates: emptyCandidates()});
+  }
+  return result;
+}
+
+function fileToDataUrl(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+function emptyCandidates(){
+  // generic placeholder before a role is assigned; shape depends on role once OCR runs
+  return {kind:'none'};
+}
+function emptyBasicCandidates(){
+  return {kind:'basic', main:{name:[], address:[], phone:[]}, emergency:{name:[], address:[], phone:[]}};
+}
+function emptyLicenseCandidates(){
+  return {kind:'license', licenses:[], dates:[]};
+}
+
+// ---------- role picker UI ----------
+function renderThumbGrid(){
+  thumbGrid.innerHTML = '';
+  pages.forEach((p, idx) => {
+    const div = document.createElement('div');
+    div.className = 'thumb-card';
+    div.innerHTML = `
+      <img src="${p.imgData}" alt="page ${p.num}">
+      <div class="thumb-label">ページ ${p.num}</div>
+      <select data-idx="${idx}">
+        <option value="skip">対象外</option>
+        <option value="basic">基本情報（氏名・住所・電話）</option>
+        <option value="license">免許証（番号・交付日）</option>
+      </select>
+    `;
+    thumbGrid.appendChild(div);
+    const sel = div.querySelector('select');
+    sel.addEventListener('change', () => {
+      pages[idx].role = sel.value;
+      div.classList.remove('role-basic', 'role-license');
+      if(sel.value === 'basic') div.classList.add('role-basic');
+      if(sel.value === 'license') div.classList.add('role-license');
+      updateStartAvailability();
+    });
+  });
+}
+
+function updateStartAvailability(){
+  const anySelected = pages.some(p => p.role !== 'skip') || licensePages.length > 0;
+  startBtn.disabled = !anySelected;
+  ocrStatusLine.textContent = anySelected
+    ? 'OCRを開始できます'
+    : '基本情報ページ・免許証ページを1つ以上指定してください';
+}
+
+// ---------- OCR pipeline ----------
+startBtn.addEventListener('click', runPipeline);
+
+async function runPipeline(){
+  startBtn.disabled = true;
+  progressWrap.style.display = 'block';
+  summarySection.style.display = 'none';
+  pagesSection.style.display = 'none';
+
+  const targets = [
+    ...pages.filter(p => p.role !== 'skip').map(p => ({...p, source:'contract'})),
+    ...licensePages.map(p => ({...p, source:'license'}))
+  ];
+  // keep references to originals so we can write back status/text/candidates
+  const refs = [
+    ...pages.filter(p => p.role !== 'skip').map(p => ({ref:p, source:'契約書'})),
+    ...licensePages.map(p => ({ref:p, source:'免許証ファイル'}))
+  ];
+
+  if(refs.length === 0){ startBtn.disabled = false; return; }
+
+  ocrStatusLine.textContent = 'OCRエンジンを準備中…';
+  const worker = await Tesseract.createWorker('jpn', 1, {
+    logger: m => {
+      if(m.status && typeof m.progress === 'number'){
+        progressLabel.textContent = `${m.status} ${(m.progress*100).toFixed(0)}%`;
+      }
+    }
+  });
+
+  combinedForTabs = refs;
+  renderTabs();
+  pagesSection.style.display = 'block';
+  activeTab = 0;
+  selectTab(0);
+
+  for(let i=0;i<refs.length;i++){
+    const {ref, source} = refs[i];
+    ref.status = 'processing';
+    ref.candidates = ref.role === 'basic' ? emptyBasicCandidates() : emptyLicenseCandidates();
+    renderTabs();
+    ocrStatusLine.textContent = `OCR実行中… (${i+1}/${refs.length}: ${source} ページ${ref.num})`;
+    progressFill.style.width = `${Math.round((i/refs.length)*100)}%`;
+
+    const {data} = await worker.recognize(ref.imgData);
+    ref.text = data.text || '';
+    ref.candidates = ref.role === 'basic' ? extractBasicInfo(ref.text) : extractLicenseInfo(ref.text);
+    ref.status = 'done';
+    renderTabs();
+    if(activeTab === i) renderPageDetail(i);
+  }
+  await worker.terminate();
+
+  progressFill.style.width = '100%';
+  progressLabel.textContent = '完了';
+  ocrStatusLine.textContent = `全${refs.length}ページのOCRが完了しました`;
+  startBtn.disabled = false;
+
+  buildSummary(refs.map(r => r.ref));
+  summarySection.style.display = 'block';
+}
+
+// ---------- extraction ----------
+function normalize(text){
+  return text.replace(/[０-９]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
+             .replace(/[‐−ー―]/g, '-');
+}
+
+// Parses forms shaped like: ラベル単独行 → 値(同じ行の残り、または次の行以降を次のラベルまで連結)
+// 「緊急連絡先」の見出しが出てきたら以降を emergency セクションとして扱う。
+// 「同上」は本人セクションの同項目の値をコピーする。
+function extractBasicInfo(rawText){
+  const text = normalize(rawText);
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  const labelDefs = [
+    {type:'address', re:/^(住\s*所|ご住所|現住所)/},
+    {type:'name', re:/^(氏\s*名|お名前|名前)/},
+    {type:'phone', re:/^(電話\s*番号|電話|TEL|Tel|℡)/},
+  ];
+  const sectionRe = /緊急連絡先/;
+  const sameAsAboveRe = /^同上$/;
+
+  const result = emptyBasicCandidates();
+  let context = 'main';
+
+  for(let i=0;i<lines.length;i++){
+    const line = lines[i];
+    if(sectionRe.test(line)){ context = 'emergency'; continue; }
+
+    let hit = null;
+    for(const def of labelDefs){
+      const m = line.match(def.re);
+      if(m){ hit = {def, m}; break; }
+    }
+    if(!hit) continue;
+
+    let rest = line.slice(hit.m.index + hit.m[0].length).replace(/^[\s:：、,　]+/, '').trim();
+    let collected = [];
+    if(rest){
+      collected.push(rest);
+    } else {
+      let j = i + 1;
+      while(j < lines.length){
+        const nxt = lines[j];
+        if(sectionRe.test(nxt)) break;
+        if(labelDefs.some(d => d.re.test(nxt))) break;
+        collected.push(nxt);
+        j++;
+      }
+      i = j - 1;
+    }
+    let value = collected.join(' ').trim();
+    if(sameAsAboveRe.test(value)){
+      value = result.main[hit.def.type][0] || '';
+    }
+    if(value) result[context][hit.def.type].push(value);
+  }
+
+  // also sweep for a bare phone-number pattern anywhere, in case the label wasn't recognized by OCR
+  const barePhones = [...text.matchAll(/0\d{1,4}-?\d{1,4}-?\d{3,4}/g)]
+    .map(m => m[0]).filter(s => s.replace(/-/g,'').length >= 10 && s.replace(/-/g,'').length <= 11);
+  barePhones.forEach(p => { if(!result.main.phone.includes(p) && !result.emergency.phone.includes(p)) result.main.phone.push(p); });
+
+  ['main','emergency'].forEach(ctx => {
+    ['name','address','phone'].forEach(t => { result[ctx][t] = uniq(result[ctx][t]); });
+  });
+  return result;
+}
+
+function extractLicenseInfo(rawText){
+  const text = normalize(rawText);
+  const c = emptyLicenseCandidates();
+  c.licenses = uniq(findNear(text, /免許/g, /\d[\d\s]{9,14}\d/, 40).map(s => s.replace(/\s/g,'')).filter(s => s.length === 12));
+  c.dates = uniq(findNear(text, /交付/g, /(令和|平成|昭和)\s*\d{1,2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}\s*[年\/\-]\s*\d{1,2}\s*[月\/\-]\s*\d{1,2}\s*日?/, 30));
+  return c;
+}
+
+// look for "ラベル: 値" or "ラベル 値" on the same line, or label alone with value on next line
+function findByLineLabel(text, labelRegex, minLen){
+  minLen = minLen || 2;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const results = [];
+  for(let i=0;i<lines.length;i++){
+    const m = lines[i].match(labelRegex);
+    if(!m) continue;
+    let rest = lines[i].slice(m.index + m[0].length).replace(/^[\s:：、,　]+/, '').trim();
+    if(rest.length >= minLen){
+      results.push(rest);
+    } else if(i+1 < lines.length && lines[i+1].length >= minLen){
+      results.push(lines[i+1]);
+    }
+  }
+  return results;
+}
+
+function findNear(text, keywordRe, valueRe, windowChars){
+  const results = [];
+  const kws = [...text.matchAll(keywordRe)];
+  for(const kw of kws){
+    const start = kw.index;
+    const windowText = text.slice(start, Math.min(text.length, start + kw[0].length + windowChars));
+    const m = windowText.match(valueRe);
+    if(m) results.push(m[0].trim());
+  }
+  return results;
+}
+
+function uniq(arr){ return [...new Set(arr.filter(Boolean))]; }
+
+// ---------- UI: tabs & page detail ----------
+function renderTabs(){
+  tabsEl.innerHTML = '';
+  combinedForTabs.forEach(({ref, source}, idx) => {
+    const t = document.createElement('div');
+    t.className = 'tab' + (idx === activeTab ? ' active' : '');
+    t.innerHTML = `<span class="dot ${ref.status}"></span>${source} p${ref.num}`;
+    t.addEventListener('click', () => selectTab(idx));
+    tabsEl.appendChild(t);
+  });
+}
+
+function selectTab(idx){
+  activeTab = idx;
+  renderTabs();
+  renderPageDetail(idx);
+}
+
+function renderPageDetail(idx){
+  const entry = combinedForTabs[idx];
+  if(!entry){ pageDetail.innerHTML=''; return; }
+  const p = entry.ref;
+  const highlightedText = highlightText(p.text, p.candidates);
+  const dash = arr => arr && arr.length ? arr.join(' / ') : '—';
+  const fieldsHtml = p.role === 'basic'
+    ? `<div><b>氏名候補（本人）:</b> ${dash(p.candidates.main && p.candidates.main.name)}</div>
+       <div><b>住所候補（本人）:</b> ${dash(p.candidates.main && p.candidates.main.address)}</div>
+       <div><b>電話番号候補（本人）:</b> ${dash(p.candidates.main && p.candidates.main.phone)}</div>
+       <div style="margin-top:6px; color:var(--ink-soft);">緊急連絡先</div>
+       <div><b>氏名候補:</b> ${dash(p.candidates.emergency && p.candidates.emergency.name)}</div>
+       <div><b>住所候補:</b> ${dash(p.candidates.emergency && p.candidates.emergency.address)}</div>
+       <div><b>電話番号候補:</b> ${dash(p.candidates.emergency && p.candidates.emergency.phone)}</div>`
+    : `<div><b>免許証番号候補:</b> ${dash(p.candidates.licenses)}</div>
+       <div><b>交付年月日候補:</b> ${dash(p.candidates.dates)}</div>`;
+
+  pageDetail.innerHTML = `
+    <div class="page-card">
+      <h3>原本プレビュー — ${entry.source} ページ${p.num}</h3>
+      <img src="${p.imgData}" alt="page ${p.num}">
+    </div>
+    <div class="page-card">
+      <h3>OCR結果 ${p.status === 'processing' ? '（処理中…）' : p.status === 'pending' ? '（未処理）' : ''}</h3>
+      <div class="candidates-mini">${fieldsHtml}</div>
+      <div class="ocr-text" style="margin-top:10px;">${highlightedText || '（OCR未実行）'}</div>
+    </div>
+  `;
+}
+
+function flattenCandidates(candidates){
+  if(!candidates) return [];
+  if(candidates.kind === 'basic'){
+    return [
+      ...(candidates.main.name||[]), ...(candidates.main.address||[]), ...(candidates.main.phone||[]),
+      ...(candidates.emergency.name||[]), ...(candidates.emergency.address||[]), ...(candidates.emergency.phone||[])
+    ];
+  }
+  if(candidates.kind === 'license'){
+    return [...(candidates.licenses||[]), ...(candidates.dates||[])];
+  }
+  return [];
+}
+
+function highlightText(text, candidates){
+  if(!text) return '';
+  let escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const all = flattenCandidates(candidates).filter(Boolean).sort((a,b) => b.length - a.length);
+  for(const val of all){
+    const escVal = val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    if(!escVal.trim()) continue;
+    try{
+      const re = new RegExp(escVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+      escaped = escaped.replace(re, m => `<mark>${m}</mark>`);
+    }catch(e){}
+  }
+  return escaped;
+}
+
+// ---------- ledger summary ----------
+function buildSummary(allProcessedPages){
+  const agg = {
+    main:{name:[], address:[], phone:[]},
+    emergency:{name:[], address:[], phone:[]},
+    licenses:[], dates:[]
+  };
+  allProcessedPages.forEach(p => {
+    if(p.candidates.kind === 'basic'){
+      ['name','address','phone'].forEach(t => {
+        agg.main[t].push(...p.candidates.main[t]);
+        agg.emergency[t].push(...p.candidates.emergency[t]);
+      });
+    } else if(p.candidates.kind === 'license'){
+      agg.licenses.push(...p.candidates.licenses);
+      agg.dates.push(...p.candidates.dates);
+    }
+  });
+  ['name','address','phone'].forEach(t => { agg.main[t] = uniq(agg.main[t]); agg.emergency[t] = uniq(agg.emergency[t]); });
+  agg.licenses = uniq(agg.licenses);
+  agg.dates = uniq(agg.dates);
+
+  const rows = [
+    {key:'name', label:'氏名', list: agg.main.name},
+    {key:'address', label:'住所', list: agg.main.address},
+    {key:'phone', label:'電話番号', list: agg.main.phone},
+    {key:'license', label:'免許証番号', list: agg.licenses},
+    {key:'date', label:'交付年月日', list: agg.dates},
+  ];
+  const emergencyRows = [
+    {key:'emergency_name', label:'氏名', list: agg.emergency.name},
+    {key:'emergency_address', label:'住所', list: agg.emergency.address},
+    {key:'emergency_phone', label:'電話番号', list: agg.emergency.phone},
+  ];
+
+  ledgerBody.innerHTML = '';
+  const makeRow = r => {
+    const tr = document.createElement('tr');
+    const found = r.list.length > 0;
+    let controlHtml;
+    if(found){
+      controlHtml = `<select class="candidate-select" data-key="${r.key}">
+        ${r.list.map(v => `<option value="${escapeAttr(v)}">${escapeHtml(v)}</option>`).join('')}
+        <option value="__manual__">（手入力する）</option>
+      </select>
+      <input type="text" class="candidate-input" data-key="${r.key}" style="display:none; margin-top:5px;" placeholder="手入力">`;
+    } else {
+      controlHtml = `<input type="text" class="candidate-input" data-key="${r.key}" placeholder="自動検出できませんでした。手入力してください">`;
+    }
+    tr.innerHTML = `
+      <td class="field-label">${r.label}</td>
+      <td>${controlHtml}</td>
+      <td><span class="found-tag ${found ? 'ok' : 'none'}">${found ? r.list.length + '件検出' : '未検出'}</span></td>
+      <td><button class="ghost small row-copy-btn" data-key="${r.key}" type="button">コピー</button></td>
+    `;
+    return tr;
+  };
+  rows.forEach(r => ledgerBody.appendChild(makeRow(r)));
+
+  const subHeader = document.createElement('tr');
+  subHeader.innerHTML = `<td colspan="4" style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:var(--ink-soft); background:var(--paper-dark); padding:6px 10px;">緊急連絡先（参考・任意）</td>`;
+  ledgerBody.appendChild(subHeader);
+  emergencyRows.forEach(r => ledgerBody.appendChild(makeRow(r)));
+
+  ledgerBody.querySelectorAll('.row-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      copyToClipboard(stripWhitespace(getFinalValue(btn.dataset.key)));
+    });
+  });
+
+  ledgerBody.querySelectorAll('select.candidate-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const input = ledgerBody.querySelector(`input.candidate-input[data-key="${sel.dataset.key}"]`);
+      if(sel.value === '__manual__'){ input.style.display = 'block'; input.focus(); }
+      else { input.style.display = 'none'; }
+    });
+  });
+}
+
+function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeAttr(s){ return escapeHtml(s).replace(/"/g,'&quot;'); }
+
+function getFinalValue(key){
+  const sel = ledgerBody.querySelector(`select.candidate-select[data-key="${key}"]`);
+  const input = ledgerBody.querySelector(`input.candidate-input[data-key="${key}"]`);
+  if(sel){ return sel.value === '__manual__' ? input.value.trim() : sel.value; }
+  return input ? input.value.trim() : '';
+}
+
+function stripWhitespace(str){
+  // remove all whitespace incl. half-width/full-width spaces, tabs, newlines
+  return (str || '').replace(/[\s\u3000]+/g, '');
+}
+
+const ALL_KEYS = ['name','address','phone','license','date','emergency_name','emergency_address','emergency_phone'];
+const KEY_LABELS = {name:'氏名', address:'住所', phone:'電話番号', license:'免許証番号', date:'交付年月日',
+  emergency_name:'緊急連絡先氏名', emergency_address:'緊急連絡先住所', emergency_phone:'緊急連絡先電話番号'};
+
+document.getElementById('copyTsvBtn').addEventListener('click', () => {
+  copyToClipboard(ALL_KEYS.map(k => stripWhitespace(getFinalValue(k))).join('\t'));
+});
+document.getElementById('copyLabeledBtn').addEventListener('click', () => {
+  copyToClipboard(ALL_KEYS.map(k => `${KEY_LABELS[k]}: ${stripWhitespace(getFinalValue(k))}`).join('\n'));
+});
+
+function copyToClipboard(str){
+  navigator.clipboard.writeText(str).then(() => {
+    ocrStatusLine.textContent = 'コピーしました';
+    setTimeout(() => { ocrStatusLine.textContent = ''; }, 2000);
+  }).catch(() => {
+    alert('コピーに失敗しました。手動で選択してコピーしてください。');
+  });
+}
+</script>
+</body>
+</html>

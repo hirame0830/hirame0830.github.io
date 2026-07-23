@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>墨ぬりAI — 個人情報マスキング補助</title>
+<style>
+  :root{
+    --bg:#EEF1F4;
+    --surface:#FFFFFF;
+    --ink:#1B2733;
+    --sub:#5C6B7A;
+    --line:#D8DEE4;
+    --sumi:#14181C;          /* 墨塗りチップ */
+    --shu:#B7342B;           /* 朱肉レッド（主アクション） */
+    --shu-dark:#992A22;
+    --ok:#0E7C66;
+    --radius:14px;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic UI",sans-serif;
+    background:var(--bg);color:var(--ink);
+    padding:16px 14px 64px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:680px;margin:0 auto}
+
+  header{margin:8px 2px 20px}
+  header h1{font-size:1.35rem;font-weight:700;letter-spacing:.02em;display:flex;align-items:center;gap:10px}
+  header h1 .stamp{
+    display:inline-block;width:30px;height:30px;border:2px solid var(--shu);color:var(--shu);
+    border-radius:6px;font-size:.85rem;font-weight:700;line-height:26px;text-align:center;flex:none;
+  }
+  header p{color:var(--sub);font-size:.82rem;margin-top:6px;line-height:1.6}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px;margin-bottom:14px;
+  }
+  .step{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+  .step .no{
+    flex:none;font-size:.7rem;font-weight:700;color:#fff;background:var(--shu);
+    border-radius:4px;padding:2px 7px;letter-spacing:.05em;
+  }
+  .step h2{font-size:1rem;font-weight:700}
+  .hint{font-size:.78rem;color:var(--sub);line-height:1.6;margin-top:6px}
+
+  textarea{
+    width:100%;border:1px solid var(--line);border-radius:10px;padding:12px;
+    font:inherit;font-size:.95rem;line-height:1.7;resize:vertical;background:#FBFCFD;color:var(--ink);
+  }
+  textarea:focus{outline:2px solid var(--ink);outline-offset:1px}
+  #srcText{min-height:150px}
+  #aiReply{min-height:120px}
+
+  button{
+    font:inherit;font-weight:700;border:none;border-radius:10px;cursor:pointer;
+    padding:13px 16px;font-size:.95rem;transition:transform .05s;
+  }
+  button:active{transform:scale(.98)}
+  .btn-primary{background:var(--shu);color:#fff;width:100%;margin-top:12px}
+  .btn-primary:active{background:var(--shu-dark)}
+  .btn-dark{background:var(--ink);color:#fff}
+  .btn-ghost{background:#fff;border:1.5px solid var(--ink);color:var(--ink)}
+  .btn-sm{padding:8px 12px;font-size:.82rem;font-weight:600;border-radius:8px}
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .btn-row button{flex:1;min-width:120px}
+
+  /* 辞書 */
+  details.dict{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+  details.dict summary{
+    font-size:.85rem;font-weight:600;color:var(--sub);cursor:pointer;list-style:none;
+    display:flex;align-items:center;gap:6px;
+  }
+  details.dict summary::before{content:"▸";transition:transform .15s}
+  details.dict[open] summary::before{transform:rotate(90deg)}
+  .dict-add{display:flex;gap:6px;margin-top:10px}
+  .dict-add input{
+    flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit;font-size:.9rem;
+  }
+  .dict-add select{
+    border:1px solid var(--line);border-radius:8px;padding:9px 6px;font:inherit;font-size:.85rem;background:#fff;
+  }
+  .dict-add button{background:var(--ink);color:#fff;padding:9px 14px;font-size:.85rem;border-radius:8px}
+  .dict-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .dict-chip{
+    display:inline-flex;align-items:center;gap:6px;background:#F1F3F5;border:1px solid var(--line);
+    border-radius:99px;padding:5px 6px 5px 12px;font-size:.82rem;
+  }
+  .dict-chip .cat{color:var(--sub);font-size:.7rem}
+  .dict-chip button{
+    background:var(--sub);color:#fff;border-radius:99px;width:20px;height:20px;padding:0;
+    font-size:.75rem;line-height:1;font-weight:400;
+  }
+  .dict-io{margin-top:10px}
+  .dict-io textarea{min-height:60px;font-size:.78rem;font-family:ui-monospace,Consolas,monospace}
+
+  /* マスク結果 */
+  .masked-view{
+    border:1px solid var(--line);border-radius:10px;background:#FBFCFD;
+    padding:12px;font-size:.95rem;line-height:1.9;white-space:pre-wrap;word-break:break-word;
+    min-height:80px;max-height:320px;overflow-y:auto;
+  }
+  .tok{
+    display:inline-block;background:var(--sumi);color:#fff;
+    font-family:ui-monospace,"SF Mono",Consolas,monospace;font-size:.78em;
+    border-radius:4px;padding:1px 7px;margin:0 1px;vertical-align:baseline;
+    letter-spacing:.02em;
+  }
+  .count-badge{font-size:.78rem;color:var(--ok);font-weight:600;margin-top:8px}
+
+  /* 対応表 */
+  table.map{width:100%;border-collapse:collapse;margin-top:8px;font-size:.85rem}
+  table.map th{
+    text-align:left;font-size:.72rem;color:var(--sub);font-weight:600;
+    padding:4px 6px;border-bottom:1px solid var(--line);
+  }
+  table.map td{padding:7px 6px;border-bottom:1px solid #EEF1F3;vertical-align:top;word-break:break-all}
+  table.map td.t{white-space:nowrap}
+  .warn{
+    font-size:.76rem;color:var(--shu);background:#FBF0EF;border-radius:8px;
+    padding:8px 10px;margin-top:10px;line-height:1.6;
+  }
+
+  details.prefix{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+  details.prefix summary{font-size:.85rem;font-weight:600;color:var(--sub);cursor:pointer}
+  details.prefix textarea{min-height:70px;font-size:.85rem;margin-top:8px}
+
+  .restore-view{
+    border:1px solid var(--line);border-radius:10px;background:#F5FAF8;
+    padding:12px;font-size:.95rem;line-height:1.8;white-space:pre-wrap;word-break:break-word;
+    margin-top:12px;
+  }
+  .restored-word{background:#DDF2EC;border-radius:3px;padding:0 2px}
+
+  /* 確認候補 */
+  .candidate-area{margin-top:14px;border-top:1px dashed var(--line);padding-top:12px}
+  .candidate-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  .candidate-head strong{font-size:.9rem}
+  .candidate-head p{font-size:.75rem;color:var(--sub);line-height:1.55;margin-top:3px}
+  .candidate-count{font-size:.72rem;color:var(--sub);white-space:nowrap;background:#F1F3F5;border-radius:99px;padding:4px 8px}
+  .candidate-list{display:grid;gap:7px;margin-top:10px}
+  .candidate-item{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:9px;padding:9px 10px;background:#FFF;cursor:pointer}
+  .candidate-item:hover{background:#FAFBFC}
+  .candidate-item input{margin-top:3px;flex:none}
+  .candidate-main{min-width:0;flex:1}
+  .candidate-value{font-size:.86rem;font-weight:700;word-break:break-all}
+  .candidate-meta{font-size:.7rem;color:var(--sub);margin-top:3px;line-height:1.45}
+  .candidate-cat{display:inline-block;background:#F4E9E7;color:var(--shu);border-radius:99px;padding:1px 6px;margin-right:5px;font-weight:700}
+  .candidate-empty{font-size:.78rem;color:var(--ok);background:#F5FAF8;border-radius:8px;padding:9px 10px;margin-top:9px}
+
+  .hidden{display:none}
+  .sample-link{
+    background:none;border:none;color:var(--sub);text-decoration:underline;
+    font-size:.78rem;font-weight:400;padding:4px 0;margin-top:6px;cursor:pointer;
+  }
+
+  /* トースト */
+  #toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
+    background:var(--ink);color:#fff;font-size:.85rem;padding:11px 18px;border-radius:99px;
+    opacity:0;pointer-events:none;transition:.25s;max-width:88vw;text-align:center;z-index:99;
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  footer{font-size:.72rem;color:var(--sub);text-align:center;margin-top:24px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1><span class="stamp">墨</span>墨ぬりAI</h1>
+  <p>元の文章をブラウザ内だけでマスキングし、確認後の文章をAIで開けます。回答はこの画面で元の言葉に復元できます。</p>
+</header>
+
+<!-- STEP 1 -->
+<div class="card">
+  <div class="step"><span class="no">1</span><h2>元の文章を貼り付け</h2></div>
+  <textarea id="srcText" placeholder="AIに聞きたい内容を、個人情報が入ったまま貼り付けてください。&#10;例）以下のメールに返信文を作って。&#10;差出人：山田太郎（yamada@example.com）…"></textarea>
+  <button class="sample-link" id="btnSample">サンプル文を入れて試す</button>
+
+  <details class="dict">
+    <summary>マスキング辞書（氏名・会社名などを登録）</summary>
+    <p class="hint">氏名や会社名は自動検出できないため、ここに登録した言葉が置き換わります。登録内容はこの画面を開いている間だけ保持されます。</p>
+    <div class="dict-add">
+      <input type="text" id="dictWord" placeholder="例：山田太郎">
+      <select id="dictCat">
+        <option value="氏名">氏名</option>
+        <option value="会社">会社</option>
+        <option value="住所">住所</option>
+        <option value="電話">電話</option>
+        <option value="メール">メール</option>
+        <option value="番号">番号・ID</option>
+        <option value="金額">金額</option>
+        <option value="日付">日付</option>
+        <option value="その他">その他</option>
+      </select>
+      <button id="btnDictAdd">追加</button>
+    </div>
+    <div class="dict-list" id="dictList"></div>
+    <details class="dict-io" style="margin-top:10px">
+      <summary style="font-size:.78rem;color:var(--sub);cursor:pointer">辞書の書き出し / 読み込み（JSON）</summary>
+      <textarea id="dictJson" placeholder='[{"w":"山田太郎","c":"氏名"}]'></textarea>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn-ghost btn-sm" id="btnDictExport">現在の辞書を書き出す</button>
+        <button class="btn-dark btn-sm" id="btnDictImport">上の内容を読み込む</button>
+      </div>
+    </details>
+  </details>
+
+  <button class="btn-primary" id="btnMask">墨ぬりする（マスキング実行）</button>
+</div>
+
+<!-- STEP 2 -->
+<div class="card hidden" id="cardResult">
+  <div class="step"><span class="no">2</span><h2>マスク結果を確認</h2></div>
+  <div class="masked-view" id="maskedView"></div>
+  <div class="count-badge" id="countBadge"></div>
+
+  <div class="candidate-area" id="candidateArea">
+    <div class="candidate-head">
+      <div>
+        <strong>念のため確認する候補</strong>
+        <p>誤爆しやすい項目は自動で消さず、ここに出します。必要なものだけ選択してください。</p>
+      </div>
+      <span class="candidate-count" id="candidateCount">0件</span>
+    </div>
+    <div class="candidate-list" id="candidateList"></div>
+    <button class="btn-dark btn-sm hidden" id="btnApplyCandidates" style="width:100%;margin-top:10px">選択した候補をマスク</button>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-ghost btn-sm" id="btnCopyMasked">マスク文をコピー</button>
+    <button class="btn-ghost btn-sm" id="btnToggleMap">対応表を表示</button>
+  </div>
+
+  <div class="hidden" id="mapArea">
+    <table class="map">
+      <thead><tr><th>トークン</th><th>元の値</th></tr></thead>
+      <tbody id="mapBody"></tbody>
+    </table>
+    <div class="warn">⚠ 対応表はこのブラウザ画面の中にだけあります。画面を閉じたり再読み込みすると消えるため、復元（手順4）まで画面を開いたままにしてください。</div>
+    <div class="btn-row"><button class="btn-ghost btn-sm" id="btnCopyMap">対応表をコピー（控え用）</button></div>
+  </div>
+</div>
+
+<!-- STEP 3 -->
+<div class="card hidden" id="cardSend">
+  <div class="step"><span class="no">3</span><h2>ワンボタンでAIに投げる</h2></div>
+  <p class="hint">押すとAIの新規チャットが開き、マスク済みの文章が入力欄にセットされます（送信内容はマスク後の文章のみ）。長文の場合は自動でコピーに切り替わるので、開いた画面に貼り付けてください。</p>
+  <div class="btn-row">
+    <button class="btn-dark" id="btnSendClaude">Claude で開く</button>
+    <button class="btn-dark" id="btnSendGPT">ChatGPT で開く</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn-ghost" id="btnCopyPrompt">コピーだけする（他のAI用）</button>
+  </div>
+  <details class="prefix">
+    <summary>AIへの前置き文（自動で先頭に付きます）</summary>
+    <textarea id="prefixText">※文中の [氏名_1] のような角括弧トークンは、マスキングされた個人情報です。トークンは書き換えず、そのままの表記で回答に使ってください。</textarea>
+  </details>
+</div>
+
+<!-- STEP 4 -->
+<div class="card hidden" id="cardRestore">
+  <div class="step"><span class="no">4</span><h2>AIの回答を復元</h2></div>
+  <p class="hint">AIの回答をコピーして貼り付けると、トークンが元の言葉に戻ります。</p>
+  <textarea id="aiReply" placeholder="AIの回答をここに貼り付け"></textarea>
+  <button class="btn-primary" id="btnRestore" style="background:var(--ok)">元に戻す（復元）</button>
+  <div class="restore-view hidden" id="restoreView"></div>
+  <div class="btn-row hidden" id="restoreCopyRow">
+    <button class="btn-ghost btn-sm" id="btnCopyRestored">復元後の文をコピー</button>
+  </div>
+</div>
+
+<footer>マスキング前の文章と復元処理はブラウザ内だけで扱います。<br>「AIで開く」を押した場合は、マスク後の文章のみ各AIサービスへ渡されます。</footer>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- 状態 ----------
+  var dict = [];              // {w:語, c:カテゴリ}
+  var mapping = [];           // {token, value, cat}
+  var counters = {};
+  var maskedRaw = "";
+  var candidates = [];        // 自動確定せず、利用者が選ぶ候補
+
+  // 候補から選んでマスクした項目を、原文の座標(start/end)で保持する。
+  // 「墨ぬりする」を再実行しても選び直させないための一時的な確認済みリスト。
+  var confirmedManual = [];       // {start, end, cat, value}
+  var confirmedSourceText = null; // このリストがどの原文に対するものか（変わったらリセット）
+  var lastSource = "";            // 直近にマスキングした原文（候補の再計算に使う）
+  var lastResolvedDetections = []; // 直近の確定済み検出範囲（候補が重複しないよう除外に使う）
+
+  // ---------- ユーティリティ ----------
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function escReg(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
+  function trimPunctuation(s){
+    return String(s).trim().replace(/[、。，．。;；]+$/g, "").replace(/(?:です|となります|でございます)$/g, "").trim();
+  }
+
+  var toastTimer;
+  function toast(msg){
+    var t = $("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 2600);
+  }
+
+  function copyText(text, doneMsg){
+    function fallback(){
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand("copy"); toast(doneMsg); }
+      catch(e){ toast("コピーできませんでした。長押しで選択してください"); }
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function(){ toast(doneMsg); }, fallback);
+    } else fallback();
+  }
+
+  function openLink(url){
+    var a = document.createElement("a");
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  function cloneRegex(re){ return new RegExp(re.source, re.flags); }
+
+  function overlapsRange(start, end, ranges){
+    return ranges.some(function(r){ return start < r.end && end > r.start; });
+  }
+
+  function addUniqueCandidate(list, c){
+    if (!c.value || c.end <= c.start) return;
+    var value = trimPunctuation(c.value);
+    if (!value || /^\[[^\]]+_\d+\]$/.test(value)) return;
+    var delta = c.value.indexOf(value);
+    c.start += Math.max(0, delta);
+    c.end = c.start + value.length;
+    c.value = value;
+    if (list.some(function(x){ return x.start === c.start && x.end === c.end; })) return;
+    list.push(c);
+  }
+
+  // ---------- 辞書 ----------
+  function renderDict(){
+    var box = $("dictList");
+    box.innerHTML = "";
+    dict.forEach(function(d, i){
+      var chip = document.createElement("span");
+      chip.className = "dict-chip";
+      chip.innerHTML = esc(d.w) + ' <span class="cat">' + esc(d.c) + '</span>';
+      var del = document.createElement("button");
+      del.textContent = "×";
+      del.setAttribute("aria-label", d.w + " を削除");
+      del.onclick = function(){ dict.splice(i,1); renderDict(); };
+      chip.appendChild(del);
+      box.appendChild(chip);
+    });
+  }
+
+  $("btnDictAdd").onclick = function(){
+    var w = $("dictWord").value.trim();
+    if (!w) { toast("語句を入力してください"); return; }
+    if (dict.some(function(d){ return d.w === w; })) { toast("すでに登録されています"); return; }
+    dict.push({ w: w, c: $("dictCat").value });
+    $("dictWord").value = "";
+    renderDict();
+  };
+  $("dictWord").addEventListener("keydown", function(e){
+    if (e.key === "Enter") { e.preventDefault(); $("btnDictAdd").click(); }
+  });
+
+  $("btnDictExport").onclick = function(){
+    var json = JSON.stringify(dict);
+    $("dictJson").value = json;
+    copyText(json, "辞書JSONをコピーしました。メモ等に保存してください");
+  };
+  $("btnDictImport").onclick = function(){
+    try {
+      var arr = JSON.parse($("dictJson").value);
+      if (!Array.isArray(arr)) throw 0;
+      // カテゴリは画面のカテゴリ選択（#dictCat）に存在する値のみを許可し、
+      // それ以外（許可リスト外の文字列・文字列以外・空文字）は「その他」に丸める。
+      var allowedCats = Array.prototype.map.call($("dictCat").options, function(o){ return o.value; });
+      dict = arr.filter(function(d){ return d && typeof d.w === "string" && d.w; })
+                .map(function(d){
+                  var c = (typeof d.c === "string" && allowedCats.indexOf(d.c) !== -1) ? d.c : "その他";
+                  return { w: d.w, c: c };
+                });
+      renderDict();
+      toast("辞書を読み込みました（" + dict.length + "件）");
+    } catch(e){ toast("JSONの形式が正しくありません"); }
+  };
+
+  // ---------- マスキング基盤 ----------
+  function getToken(cat, value){
+    for (var i = 0; i < mapping.length; i++) {
+      if (mapping[i].value === value && mapping[i].cat === cat) return mapping[i].token;
+    }
+    counters[cat] = (counters[cat] || 0) + 1;
+    var token = "[" + cat + "_" + counters[cat] + "]";
+    mapping.push({ token: token, value: value, cat: cat });
+    return token;
+  }
+
+  function addDetection(list, start, end, cat, value, priority, reason){
+    if (start < 0 || end <= start || !value) return;
+    list.push({ start:start, end:end, cat:cat, value:value, priority:priority || 50, reason:reason || "" });
+  }
+
+  function collectRegex(source, list, spec){
+    var re = cloneRegex(spec.re);
+    var m;
+    while ((m = re.exec(source))) {
+      var whole = m[0];
+      var value = spec.group ? m[spec.group] : whole;
+      if (!value) continue;
+      if (spec.validate && !spec.validate(value, m.index, source, whole)) continue;
+      var local = whole.indexOf(value);
+      var start = m.index + (local < 0 ? 0 : local);
+      addDetection(list, start, start + value.length, spec.cat, value, spec.priority, spec.reason);
+      if (re.lastIndex === m.index) re.lastIndex++;
+    }
+  }
+
+  function resolveDetections(list){
+    var accepted = [];
+    list.slice().sort(function(a,b){
+      return (b.priority - a.priority) || ((b.end-b.start) - (a.end-a.start)) || (a.start-b.start);
+    }).forEach(function(d){
+      if (!accepted.some(function(a){ return d.start < a.end && d.end > a.start; })) accepted.push(d);
+    });
+    return accepted.sort(function(a,b){ return a.start-b.start || b.priority-a.priority; });
+  }
+
+  function applyDetections(source, detections, reset){
+    if (reset) { mapping = []; counters = {}; }
+    var resolved = resolveDetections(detections);
+    var out = "";
+    var cursor = 0;
+    resolved.forEach(function(d){
+      out += source.slice(cursor, d.start);
+      out += getToken(d.cat, d.value);
+      cursor = d.end;
+    });
+    out += source.slice(cursor);
+    return out;
+  }
+
+  function isLikelyPersonName(value){
+    var v = value.replace(/[ 　]/g, "");
+    if (v.length < 2 || v.length > 12) return false;
+    if (/^(未定|不明|なし|該当なし|担当者|責任者|本人)$/.test(v)) return false;
+    return /^[一-龠々ぁ-んァ-ヶー]+$/.test(v);
+  }
+
+  function luhnValid(value){
+    var digits = value.replace(/\D/g, "");
+    if (digits.length < 13 || digits.length > 19) return false;
+    var sum = 0, alt = false;
+    for (var i = digits.length - 1; i >= 0; i--) {
+      var n = Number(digits.charAt(i));
+      if (alt) { n *= 2; if (n > 9) n -= 9; }
+      sum += n; alt = !alt;
+    }
+    return sum % 10 === 0;
+  }
+
+  function nearestHeading(source, start){
+    var before = source.slice(0, start).split("\n");
+    for (var i = before.length - 1, checked = 0; i >= 0 && checked < 8; i--, checked++) {
+      var line = before[i].trim();
+      if (!line) continue;
+      var m = line.match(/^([^：:]{1,24})[：:]$/);
+      if (m) return m[1];
+    }
+    return "";
+  }
+
+  function phoneValid(value, start, source){
+    var digits = value.replace(/\D/g, "");
+    if (!(digits.length === 10 || digits.length === 11) || digits.charAt(0) !== "0") return false;
+    if (/^(050|070|080|090)/.test(digits) && digits.length === 11) return true;
+    if (/[-ー－ 　()（）]/.test(value)) return true;
+    var lineStart = source.lastIndexOf("\n", start) + 1;
+    var prefix = source.slice(lineStart, start);
+    if (/(?:電話|携帯|TEL|ＦＡＸ|FAX|連絡先)\s*[：:]?\s*$/i.test(prefix)) return true;
+    return /電話|携帯|連絡先|TEL|FAX/i.test(nearestHeading(source, start));
+  }
+
+  function looksLikeAddress(value){
+    return /(?:市|区|郡|町|村)/.test(value) && /(?:\d{1,4}\s*[-ー－]\s*\d{1,4}|\d+丁目|\d+番(?:地)?|\d+号)/.test(value);
+  }
+
+  function collectLabeled(source, list){
+    var autoMap = {
+      "氏名":"氏名", "旧姓":"氏名", "担当者名":"氏名",
+      "社員番号":"社員番号", "従業員番号":"社員番号", "スタッフID":"社員番号",
+      "顧客コード":"顧客コード", "会員番号":"会員番号",
+      "請求書番号":"請求書番号", "伝票番号":"伝票番号", "注文番号":"注文番号",
+      "普通口座":"口座番号", "当座口座":"口座番号", "口座番号":"口座番号",
+      "口座名義":"口座名義", "銀行名":"銀行", "支店名":"支店",
+      "車台番号":"車台番号", "車両番号":"車両番号",
+      "運転免許証番号":"免許証番号", "免許証番号":"免許証番号",
+      "健康保険証記号番号":"保険証番号", "保険証記号番号":"保険証番号",
+      "マイナンバー確認用番号":"個人番号", "マイナンバー":"個人番号", "個人番号":"個人番号",
+      "生年月日":"生年月日", "有効期限":"有効期限",
+      "セキュリティコード":"セキュリティコード", "暗証番号":"暗証番号"
+    };
+    var labels = Object.keys(autoMap).sort(function(a,b){ return b.length-a.length; }).map(escReg).join("|");
+    var re = new RegExp("^(\\s*)(" + labels + ")(\\s*[：:]\\s*)(.*?)\\s*$");
+    var lines = source.split("\n");
+    var offset = 0;
+    lines.forEach(function(line){
+      var m = line.match(re);
+      if (m && m[4]) {
+        var label = m[2], value = trimPunctuation(m[4]);
+        if (value) {
+          var start = offset + line.indexOf(m[4]);
+          if (/^(氏名|旧姓|担当者名)$/.test(label) && !isLikelyPersonName(value)) {
+            // 氏名欄でも値が部署名・未定などなら自動確定しない
+          } else {
+            addDetection(list, start, start + value.length, autoMap[label], value, 105, "項目名から判定");
+          }
+        }
+      }
+
+      var am = line.match(/^(\s*)(住所|所在地|集荷先住所|配送先住所|請求先住所|送付先住所)(\s*[：:]\s*)(.*?)\s*$/);
+      if (am && am[4]) {
+        var raw = trimPunctuation(am[4]);
+        var base = offset + line.indexOf(am[4]);
+        var pm = raw.match(/^〒\s*\d{3}[-ー－]?\d{4}\s*/);
+        if (pm) {
+          var pv = pm[0].trim();
+          addDetection(list, base, base + pv.length, "郵便番号", pv, 108, "住所欄の郵便番号");
+          var rest = raw.slice(pm[0].length).trim();
+          if (rest && looksLikeAddress(rest)) {
+            var rs = base + raw.indexOf(rest);
+            addDetection(list, rs, rs + rest.length, "住所", rest, 106, "住所欄");
+          }
+        } else if (looksLikeAddress(raw)) {
+          addDetection(list, base, base + raw.length, "住所", raw, 106, "住所欄");
+        }
+      }
+      offset += line.length + 1;
+    });
+  }
+
+  function collectCompanies(source, list){
+    var prefixes = ["特定非営利活動法人","一般社団法人","一般財団法人","公益社団法人","公益財団法人","社会福祉法人","医療法人","学校法人","宗教法人","株式会社","有限会社","合同会社","合資会社","合名会社","NPO法人"];
+    var pre = new RegExp("(" + prefixes.map(escReg).join("|") + ")([^\\s、。，．,「」『』【】［］\\[\\]（）()]{1,40})", "g");
+    var m;
+    while ((m = pre.exec(source))) {
+      var tail = m[2];
+      var cut = tail.search(/(?:の(?=[一-龠々ぁ-んァ-ヶーA-Za-z])|様|御中|宛|です|でございます|と申します|について|とは|から|にて|へ)/);
+      if (cut >= 0) tail = tail.slice(0, cut);
+      if (tail.length < 2 || /^(について|とは|制度|説明)$/.test(tail)) continue;
+      var value = m[1] + tail;
+      addDetection(list, m.index, m.index + value.length, "会社", value, 92, "法人格から判定");
+    }
+
+    var suffix = /([^\s、。，．,「」『』【】［］\[\]（）()：:]{2,30}?)(株式会社|有限会社|合同会社|合資会社|合名会社)(?=様|御中|宛|の(?=[一-龠々ぁ-んァ-ヶーA-Za-z])|[）)】\]\s、。]|$)/g;
+    while ((m = suffix.exec(source))) {
+      var name = m[1];
+      if (/(?:以下|上記|当該)$/.test(name) || /[のはがをに]$/.test(name) || /(?:おける|という|ついて|ための)/.test(name)) continue;
+      addDetection(list, m.index, m.index + m[0].length, "会社", m[0], 91, "法人格から判定");
+    }
+  }
+
+  function collectAddresses(source, list){
+    var re = /(北海道|東京都|京都府|大阪府|[一-龠々ヶ]{2,3}県)[^\n、。]{2,70}/g;
+    var m;
+    while ((m = re.exec(source))) {
+      var value = trimPunctuation(m[0]);
+      var stop = value.search(/(?:です|でございます|となります|と伺っています|へお願いいたします)/);
+      if (stop >= 0) value = value.slice(0, stop).trim();
+      if (!looksLikeAddress(value)) continue;
+      addDetection(list, m.index, m.index + value.length, "住所", value, 88, "都道府県・市区町村・番地から判定");
+    }
+  }
+
+  function collectAutoDetections(source){
+    var list = [];
+
+    // 辞書は最優先
+    dict.slice().sort(function(a,b){ return b.w.length-a.w.length; }).forEach(function(d){
+      var pos = 0;
+      while ((pos = source.indexOf(d.w, pos)) >= 0) {
+        addDetection(list, pos, pos+d.w.length, d.c, d.w, 130, "辞書");
+        pos += Math.max(1, d.w.length);
+      }
+    });
+
+    collectLabeled(source, list);
+    collectCompanies(source, list);
+    collectAddresses(source, list);
+
+    collectRegex(source, list, {
+      cat:"メール", priority:100,
+      re:/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g
+    });
+    collectRegex(source, list, {
+      cat:"カード番号", priority:99, group:1,
+      re:/(?:^|[^\d])((?:\d{4}[\- 　]){3}\d{4})(?!\d)/g,
+      validate:function(v){ return luhnValid(v); }
+    });
+    collectRegex(source, list, {
+      cat:"電話", priority:98, group:1,
+      re:/(?:^|[^\d])((?:\(?0\d{1,4}\)?|（0\d{1,4}）)(?:[\-ー－ 　]\d{1,4}){1,2})(?!\d)/g,
+      validate:phoneValid
+    });
+    collectRegex(source, list, {
+      cat:"電話", priority:97, group:1,
+      re:/(?:^|[^\d])(0\d{9,10})(?!\d)/g,
+      validate:phoneValid
+    });
+    collectRegex(source, list, {
+      cat:"郵便番号", priority:96,
+      re:/〒\s*\d{3}[\-ー－]?\d{4}/g
+    });
+    collectRegex(source, list, {
+      cat:"郵便番号", priority:95, group:1,
+      re:/(?:^|[^\d\-ー－])(\d{3}[\-ー－]\d{4})(?![\d\-ー－])/g
+    });
+
+    // ここでは優先度解決前の生リストを返す。呼び出し側で確認済みの手動選択と
+    // マージしてから resolveDetections() で一括解決する（マージ後の再構築を安全にするため）。
+    return list;
+  }
+
+  // ---------- 確認候補 ----------
+  // source: 元の原文（マスキング前のテキスト）
+  // claimedRanges: すでに確定している検出範囲（自動検出＋確認済みの手動選択）。この範囲と重なる候補は出さない。
+  function collectCandidates(source, claimedRanges){
+    var list = [];
+
+    function addByRegex(re, cat, reason, group, validator){
+      var rx = cloneRegex(re), m;
+      while ((m = rx.exec(source))) {
+        var value = group ? m[group] : m[0];
+        if (!value || (validator && !validator(value, m.index, source))) continue;
+        var local = m[0].indexOf(value);
+        var start = m.index + (local < 0 ? 0 : local);
+        var end = start + value.length;
+        if (!overlapsRange(start, end, claimedRanges)) {
+          addUniqueCandidate(list, { start:start, end:end, value:value, cat:cat, reason:reason });
+        }
+        if (rx.lastIndex === m.index) rx.lastIndex++;
+      }
+    }
+
+    // 敬称つき、または自己紹介文に現れる氏名らしい文字列
+    addByRegex(/([一-龠々]{2,8})(?=(?:様|さん|氏))/g, "氏名", "敬称の直前にある氏名候補", 1, function(v){
+      return !/^(お客様|皆様|各位|担当者|責任者)$/.test(v);
+    });
+    addByRegex(/(?:の|は)([一-龠々]{2,8})(?:です|と申します)/g, "氏名", "自己紹介文にある氏名候補", 1, function(v){
+      return isLikelyPersonName(v) && !/^(住所|内容|予定|以下|以上|こちら|担当|対象|条件|結果|理由|制度|情報|会社|部署|商品|荷物)$/.test(v);
+    });
+    addByRegex(/(?:緊急連絡先|連絡担当者)(?:は|[：:])\s*[、,]?\s*([一-龠々]{2,8})/g,
+      "氏名", "連絡先として書かれた氏名候補", 1, isLikelyPersonName);
+    addByRegex(/([一-龠々]{2,8}?)(?:様|さん)?(?=の(?:住所|電話|携帯|メール))/g,
+      "氏名", "連絡先情報の直前にある氏名候補", 1, function(v){
+        return isLikelyPersonName(v) && !/^(以下|以上|本人|会社|担当者|責任者|荷物|商品の?)$/.test(v);
+      });
+
+    // 「担当者：」は部署名などもあり得るため自動確定せず候補へ
+    addByRegex(/(?:^|\n)\s*(?:担当者|責任者|緊急連絡先)\s*[：:]\s*([一-龠々ぁ-んァ-ヶー 　]{2,16})/g,
+      "氏名", "担当者欄の値", 1, isLikelyPersonName);
+
+    // 人名一覧の見出し直下
+    var lines = source.split("\n"), offset = 0, personSection = false;
+    lines.forEach(function(line){
+      var t = line.trim();
+      if (/^(?:運転者|担当者一覧|氏名一覧|従業員|社員|出席者)\s*[：:]$/.test(t)) {
+        personSection = true;
+      } else if (!t) {
+        personSection = false;
+      } else if (/^[^：:]{1,24}[：:]$/.test(t)) {
+        personSection = false;
+      } else if (personSection && isLikelyPersonName(t)) {
+        var s = offset + line.indexOf(t);
+        if (!overlapsRange(s, s+t.length, claimedRanges)) addUniqueCandidate(list, {
+          start:s, end:s+t.length, value:t, cat:"氏名", reason:"氏名一覧の見出し直下"
+        });
+      }
+      offset += line.length + 1;
+    });
+
+    addByRegex(/(?:[￥¥]\s*)?\d{1,3}(?:,\d{3})+(?:\.\d+)?円?|\d+(?:\.\d+)?万円/g,
+      "金額", "金額らしい表記");
+    addByRegex(/(?:19|20)\d{2}年\d{1,2}月\d{1,2}日|(?:19|20)\d{2}[\/.\-]\d{1,2}[\/.\-]\d{1,2}/g,
+      "日付", "年月日を含む日付");
+    addByRegex(/[一-龠々]{2,5}\s*\d{2,3}\s*[ぁ-んァ-ヶA-Za-z]\s*\d{1,2}[\-ー－]\d{2}/g,
+      "車両番号", "自動車登録番号らしい表記");
+    addByRegex(/\b(?=[A-Z0-9\-]{8,}\b)(?=[A-Z0-9\-]*[A-Z])(?=[A-Z0-9\-]*\d)[A-Z0-9]+(?:\-[A-Z0-9]+)+\b/g,
+      "番号", "長い英数字ID");
+    addByRegex(/(?:番号|コード|口座|ID|ＩＤ)[^0-9\n]{0,18}(\d{6,18})/g,
+      "番号", "番号・コードの近くにある長い数字", 1);
+
+    // 県名が省略された住所は誤判定しやすいため候補止まり
+    addByRegex(/[一-龠々ヶ]{2,10}(?:市|区|町|村)[^\n、。]{0,45}/g,
+      "住所", "県名が省略された住所候補", 0, function(v){ return looksLikeAddress(trimPunctuation(v)); });
+
+    return list.sort(function(a,b){ return a.start-b.start || (b.end-b.start)-(a.end-a.start); });
+  }
+
+  function renderCandidates(){
+    candidates = collectCandidates(lastSource, lastResolvedDetections);
+    var box = $("candidateList");
+    var btn = $("btnApplyCandidates");
+    box.innerHTML = "";
+    $("candidateCount").textContent = candidates.length + "件";
+
+    if (!candidates.length) {
+      box.innerHTML = '<div class="candidate-empty">✓ 追加で確認する候補は見つかりませんでした</div>';
+      btn.classList.add("hidden");
+      return;
+    }
+
+    candidates.forEach(function(c, i){
+      var label = document.createElement("label");
+      label.className = "candidate-item";
+      label.innerHTML = '<input type="checkbox" data-i="' + i + '">' +
+        '<span class="candidate-main"><span class="candidate-value">' + esc(c.value) + '</span>' +
+        '<span class="candidate-meta"><span class="candidate-cat">' + esc(c.cat) + '</span>' + esc(c.reason) + '</span></span>';
+      box.appendChild(label);
+    });
+    btn.classList.remove("hidden");
+  }
+
+  $("btnApplyCandidates").onclick = function(){
+    var selected = [];
+    $("candidateList").querySelectorAll('input[type="checkbox"]:checked').forEach(function(cb){
+      var c = candidates[Number(cb.getAttribute("data-i"))];
+      if (c) selected.push({ start:c.start, end:c.end, value:c.value, cat:c.cat });
+    });
+    if (!selected.length) { toast("マスクする候補を選んでください"); return; }
+    // 選択内容は原文座標のまま確認済みリストへ積み、原文から丸ごと再構築する。
+    // こうすることで「墨ぬりする」を再実行しても同じ確認済みマスクが自動再適用される。
+    confirmedManual = confirmedManual.concat(selected);
+    runMask(lastSource);
+    toast(selected.length + "件の候補をマスクしました");
+  };
+
+  function renderResult(){
+    var html = esc(maskedRaw).replace(/\[([^\[\]\n]{1,24}_\d+)\]/g, '<span class="tok">[$1]</span>');
+    $("maskedView").innerHTML = html;
+    $("countBadge").textContent = mapping.length
+      ? "✓ " + mapping.length + " 種類をマスキングしました"
+      : "マスキング対象は見つかりませんでした";
+
+    var body = $("mapBody");
+    body.innerHTML = "";
+    mapping.slice().sort(function(a,b){
+      return maskedRaw.indexOf(a.token) - maskedRaw.indexOf(b.token);
+    }).forEach(function(m){
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td class="t"><span class="tok">' + esc(m.token) + '</span></td><td>' + esc(m.value) + '</td>';
+      body.appendChild(tr);
+    });
+    renderCandidates();
+  }
+
+  // 原文(source)から、自動検出と「確認済みの手動選択」を合わせて解決し、
+  // マスク結果とmapping/トークン番号を毎回まっさらに再構築する。
+  // 常にこの一本の経路で再構築することで、番号のズレや重複を防ぐ。
+  function runMask(source){
+    if (source !== confirmedSourceText) {
+      // 元の文章が変わっていたら、以前の候補選択履歴は座標が意味を持たなくなるためリセットする
+      confirmedManual = [];
+      confirmedSourceText = source;
+    }
+    lastSource = source;
+
+    var autoList = collectAutoDetections(source); // 未解決の生リスト
+    var manualList = confirmedManual.map(function(c){
+      return { start:c.start, end:c.end, cat:c.cat, value:c.value, priority:120, reason:"確認済み候補" };
+    });
+    var resolved = resolveDetections(autoList.concat(manualList));
+
+    lastResolvedDetections = resolved;
+    maskedRaw = applyDetections(source, resolved, true);
+    renderResult();
+  }
+
+  $("btnMask").onclick = function(){
+    var source = $("srcText").value;
+    if (!source.trim()) { toast("文章を貼り付けてください"); return; }
+
+    runMask(source);
+
+    $("cardResult").classList.remove("hidden");
+    $("cardSend").classList.remove("hidden");
+    $("cardRestore").classList.remove("hidden");
+    $("cardResult").scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  $("btnCopyMasked").onclick = function(){ copyText(maskedRaw, "マスク文をコピーしました"); };
+  $("btnToggleMap").onclick = function(){
+    var area = $("mapArea");
+    var hiddenNow = area.classList.toggle("hidden");
+    this.textContent = hiddenNow ? "対応表を表示" : "対応表を隠す";
+  };
+  $("btnCopyMap").onclick = function(){
+    var lines = mapping.map(function(m){ return m.token + "\t" + m.value; });
+    copyText(lines.join("\n"), "対応表をコピーしました（メモ等に控えてください）");
+  };
+
+  // ---------- AIに投げる ----------
+  // 新規チャットURLの ?q= にプロンプトをそのまま載せられる長さの目安。
+  // ブラウザやAIサービス側のURL長制限を超えると、リンクが開けない・
+  // クエリが途中で切り詰められるおそれがあるため、これを超える場合は
+  // URLに載せず、クリップボードへコピーする方式にフォールバックする。
+  var URL_PROMPT_MAX_LENGTH = 7000;
+
+  function buildPrompt(){
+    var prefix = $("prefixText").value.trim();
+    return (prefix ? prefix + "\n\n---\n\n" : "") + maskedRaw;
+  }
+
+  function sendTo(base, plain, name){
+    if (!maskedRaw) { toast("先にマスキングしてください"); return; }
+    var prompt = buildPrompt();
+    var url = base + encodeURIComponent(prompt);
+    if (url.length > URL_PROMPT_MAX_LENGTH) {
+      copyText(prompt, "長文のためコピーしました。" + name + "の入力欄に貼り付けてください");
+      setTimeout(function(){ openLink(plain); }, 400);
+    } else {
+      openLink(url);
+    }
+  }
+
+  $("btnSendClaude").onclick = function(){
+    sendTo("https://claude.ai/new?q=", "https://claude.ai/new", "Claude");
+  };
+  $("btnSendGPT").onclick = function(){
+    sendTo("https://chatgpt.com/?q=", "https://chatgpt.com/", "ChatGPT");
+  };
+  $("btnCopyPrompt").onclick = function(){
+    if (!maskedRaw) { toast("先にマスキングしてください"); return; }
+    copyText(buildPrompt(), "コピーしました。お好きなAIに貼り付けてください");
+  };
+
+  // ---------- 復元 ----------
+  $("btnRestore").onclick = function(){
+    var text = $("aiReply").value;
+    if (!text.trim()) { toast("AIの回答を貼り付けてください"); return; }
+    if (!mapping.length) { toast("対応表がありません。先にマスキングを実行してください"); return; }
+
+    mapping.forEach(function(m){
+      var core = m.token.slice(1, -1);
+      var re = new RegExp("[\\[［]\\s*" + escReg(core) + "\\s*[\\]］]", "g");
+      text = text.replace(re, "\u0000" + m.value + "\u0000");
+    });
+
+    var html = esc(text).replace(/\u0000([^\u0000]*)\u0000/g, '<span class="restored-word">$1</span>');
+    $("restoreView").innerHTML = html;
+    $("restoreView").classList.remove("hidden");
+    $("restoreCopyRow").classList.remove("hidden");
+    toast("復元しました");
+  };
+
+  $("btnCopyRestored").onclick = function(){
+    copyText($("restoreView").textContent, "復元後の文をコピーしました");
+  };
+
+  // ---------- サンプル ----------
+  $("btnSample").onclick = function(){
+    $("srcText").value =
+"以下のメールに、丁寧なお断りの返信文を作ってください。\n\n" +
+"差出人：山田太郎（株式会社大分ロジ）\n" +
+"メール：t.yamada@example.co.jp\n" +
+"電話：097-123-4567 / 090 1234 5678\n" +
+"住所：〒870-0021 大分県大分市府内町1-2-3\n\n" +
+"東京都では来月から制度が始まります。\n" +
+"「来月から御社の軽バン2台を毎日チャーターしたいのですが、単価を2割下げていただけませんか。」";
+    if (!dict.some(function(d){ return d.w === "山田太郎"; })) dict.push({ w:"山田太郎", c:"氏名" });
+    renderDict();
+    document.querySelector("details.dict").open = true;
+    toast("サンプルと氏名辞書1件をセットしました");
+  };
+
+})();
+</script>
+</body>
+</html>

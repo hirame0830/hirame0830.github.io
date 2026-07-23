@@ -1,0 +1,1812 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF テキスト抽出・大分類／所属別整理</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #20242c;
+      --muted: #697386;
+      --line: #dbe1ea;
+      --accent: #4058d6;
+      --accent-soft: #eef1ff;
+      --danger: #b42318;
+      --ok: #067647;
+      --warn: #92400e;
+      font-family: "Yu Gothic UI", Meiryo, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); }
+    main { width: min(1180px, calc(100% - 32px)); margin: 28px auto 48px; }
+    h1 { font-size: 26px; margin: 0 0 8px; }
+    h2 { font-size: 17px; margin: 0; }
+    p { line-height: 1.65; }
+    .lead { margin: 0 0 20px; color: var(--muted); }
+    .privacy {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 12px 14px; margin-bottom: 18px;
+      border: 1px solid #b7e4d2; border-radius: 12px; background: #ecfdf5;
+      color: #065f46; font-size: 14px;
+    }
+    .grid { display: grid; grid-template-columns: 360px 1fr; gap: 18px; align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 6px 24px rgba(20, 32, 60, .06); }
+    .settings { padding: 18px; position: sticky; top: 14px; }
+    .output-panel { min-width: 0; }
+    .output-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+    .dropzone {
+      display: block; width: 100%; margin: 14px 0 16px; padding: 26px 16px; text-align: center;
+      border: 2px dashed #aeb8ca; border-radius: 14px; background: #fafbfe;
+      cursor: pointer; transition: .15s ease;
+    }
+    .dropzone.drag { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
+    .dropzone strong { display: block; margin-bottom: 6px; }
+    .dropzone small { color: var(--muted); }
+    input[type="file"] { display: none; }
+    label.field { display: block; margin: 14px 0; }
+    .field-title { display: block; margin-bottom: 7px; font-size: 13px; font-weight: 700; }
+    input[type="text"], select {
+      width: 100%; padding: 10px 11px; border: 1px solid #bdc6d4; border-radius: 9px;
+      background: #fff; color: var(--ink); font: inherit;
+    }
+    .check { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0; font-size: 14px; }
+    button {
+      border: 0; border-radius: 10px; padding: 10px 14px; font: inherit; font-weight: 700;
+      cursor: pointer; background: #e9edf4; color: #2d3542;
+    }
+    button.primary { width: 100%; padding: 13px; background: var(--accent); color: #fff; }
+    button.secondary { width: 100%; margin-top: 8px; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .status { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #f4f6fa; color: var(--muted); font-size: 13px; min-height: 40px; white-space: pre-wrap; }
+    .status.error { color: var(--danger); background: #fff1f0; }
+    .status.ok { color: var(--ok); background: #ecfdf3; }
+    .status.warning { color: var(--warn); background: #fffbeb; }
+    progress { width: 100%; height: 10px; margin-top: 10px; }
+    textarea {
+      width: 100%; height: 68vh; min-height: 520px; resize: vertical; border: 0; outline: 0;
+      padding: 18px; font: 14px/1.72 Consolas, "Yu Gothic UI", Meiryo, monospace; color: #172033; background: #fff;
+      border-radius: 0 0 16px 16px; tab-size: 4;
+    }
+    .meta { color: var(--muted); font-size: 13px; }
+    .help { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .filename { margin-top: 9px; color: var(--accent); font-size: 13px; overflow-wrap: anywhere; }
+    .debug { margin-top: 10px; font-size: 12px; color: var(--muted); white-space: pre-wrap; max-height: 130px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: #fafbfe; }
+
+    .affiliation-tool { border-top: 1px solid var(--line); padding: 18px; background: #fbfcff; }
+    .affiliation-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
+    .affiliation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .affiliation-grid .field { margin: 0; }
+    .affiliation-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 10px; }
+    .affiliation-actions button { flex: 1 1 150px; }
+    .affiliation-actions .primary-small { background: var(--accent); color: #fff; }
+    .affiliation-note { margin: 0 0 10px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    #filteredOutput { min-height: 340px; height: 45vh; border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .summary-tool { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+    #summaryOutput { min-height: 240px; height: 32vh; border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    #dateCoordinateOutput { min-height: 280px; height: 38vh; border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .mini-status { margin: 8px 0 10px; padding: 9px 11px; border-radius: 9px; background: #f4f6fa; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+    .mini-status.error { color: var(--danger); background: #fff1f0; }
+    .mini-status.ok { color: var(--ok); background: #ecfdf3; }
+    @media (max-width: 850px) {
+      main { width: min(100% - 18px, 1180px); margin-top: 12px; }
+      .grid { grid-template-columns: 1fr; }
+      .settings { position: static; }
+      textarea { height: 58vh; min-height: 420px; }
+      .output-head { align-items: flex-start; flex-direction: column; }
+      .affiliation-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>PDF テキスト抽出・大分類／所属別整理</h1>
+  <p class="lead">「■○○費」のような大分類と所属を見分けて、必要な表をまとめて抜き出せます。</p>
+
+  <div class="privacy">
+    <strong>ローカル処理：</strong>
+    <span>選んだPDFの内容はアップロードしません。PDF.jsは同梱済みです。このスマホ互換版は古めの安定版PDF.jsを使い、外部CDNは使いません。</span>
+  </div>
+
+  <div class="grid">
+    <section class="panel settings">
+      <h2>1. PDFを選ぶ</h2>
+      <label class="dropzone" id="dropzone" for="fileInput">
+        <strong>ここにPDFをドロップ</strong>
+        <small>またはクリックして選択</small>
+        <div class="filename" id="filename">未選択</div>
+      </label>
+      <input id="fileInput" type="file" accept="application/pdf,.pdf">
+
+      <h2>2. 抽出方法</h2>
+      <label class="field">
+        <span class="field-title">出力形式</span>
+        <select id="mode">
+          <option value="layout">見た目に近い行・列（おすすめ）</option>
+          <option value="simple">PDF内部の文字順</option>
+          <option value="items">文字と座標の詳細</option>
+          <option value="json">JSON（後の表抽出用）</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field-title">対象ページ</span>
+        <input id="pageRange" type="text" placeholder="空欄＝全ページ、例：1-3, 7, 10-12">
+      </label>
+
+      <label class="check">
+        <input id="pageHeaders" type="checkbox" checked>
+        <span>ページ見出しを入れる</span>
+      </label>
+      <label class="check">
+        <input id="normalizeSpaces" type="checkbox">
+        <span>連続する空白を1つにまとめる</span>
+      </label>
+      <label class="check">
+        <input id="forceNoWorker" type="checkbox">
+        <span>Workerなしで試す（スマホで落ちる時用）</span>
+      </label>
+
+      <button id="extractBtn" class="primary" disabled>テキストを抽出</button>
+      <button id="testBtn" class="secondary" disabled>最初の1ページだけ試す</button>
+      <progress id="progress" value="0" max="1" hidden></progress>
+      <div id="status" class="status">PDFを選んでください。</div>
+      <div id="debug" class="debug">診断ログ：まだありません</div>
+
+      <div class="help">
+        <b>スマホで失敗する場合：</b><br>
+        まず「最初の1ページだけ試す」。それでも即落ちする場合は「Workerなしで試す」にチェックを入れてください。
+      </div>
+    </section>
+
+    <section class="panel output-panel">
+      <div class="output-head">
+        <div>
+          <h2>抽出結果</h2>
+          <div id="meta" class="meta">まだ抽出していません</div>
+        </div>
+        <div class="actions">
+          <button id="copyBtn" disabled>コピー</button>
+          <button id="downloadBtn" disabled>保存</button>
+          <button id="clearBtn" disabled>クリア</button>
+        </div>
+      </div>
+      <textarea id="output" spellcheck="false" placeholder="抽出結果がここに表示されます。ここは直接編集できます。"></textarea>
+
+      <div class="affiliation-tool">
+        <div class="affiliation-head">
+          <h2>大分類・所属ごとに表を抜き出す</h2>
+          <div id="affiliationMeta" class="meta">まだ検出していません</div>
+        </div>
+        <p class="affiliation-note">上の「抽出結果」を修正したあとでも使えます。「■」を含む行を大分類、表見出しの直前にある行を所属名として判定します。同じ所属が複数の大分類にあってもまとめて扱えます。補助側の表見出しが少し違っても拾いやすいよう、初期値は「業者名,氏名」にしています。</p>
+        <div class="affiliation-grid">
+          <label class="field">
+            <span class="field-title">表見出しに必ず入る言葉（ゆるめ推奨）</span>
+            <input id="headerKeywords" type="text" value="業者名,氏名" placeholder="カンマ区切り">
+          </label>
+          <label class="field">
+            <span class="field-title">大分類の先頭記号</span>
+            <input id="categoryPrefix" type="text" value="■" placeholder="例：■">
+          </label>
+          <label class="field">
+            <span class="field-title">解析開始タイトル（任意）</span>
+            <input id="startTitle" type="text" placeholder="例：■○○費（空欄なら全文）">
+          </label>
+          <label class="field">
+            <span class="field-title">抜き出す大分類</span>
+            <select id="categorySelect" disabled>
+              <option value="__ALL__">先に所属を検出してください</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-title">抜き出す所属</span>
+            <select id="affiliationSelect" disabled>
+              <option value="">先に所属を検出してください</option>
+            </select>
+          </label>
+        </div>
+        <div class="affiliation-actions">
+          <button id="detectAffiliationsBtn">所属を検出</button>
+          <button id="extractAffiliationBtn" class="primary-small" disabled>選択した所属を抜き出す</button>
+          <button id="copyFilteredBtn" disabled>結果をコピー</button>
+          <button id="downloadFilteredBtn" disabled>結果を保存</button>
+        </div>
+        <div id="affiliationStatus" class="mini-status">PDFを抽出すると、所属候補を自動検出します。</div>
+        <textarea id="filteredOutput" spellcheck="false" placeholder="選んだ所属の表がここにまとまります。ここも直接編集できます。"></textarea>
+
+        <div class="summary-tool">
+          <div class="affiliation-head">
+            <h2>氏名・稼働集計</h2>
+            <div id="summaryMeta" class="meta">まだ集計していません</div>
+          </div>
+          <p class="affiliation-note">上の所属別結果から、業者名とIDを除外し、「氏名／稼働数／稼働日数／稼働C合計」の4列にします。最後の数字を稼働数、その1つ前を稼働C合計、それ以前に並ぶ日別数字の個数を稼働日数として数えます。</p>
+          <div class="affiliation-actions">
+            <button id="buildSummaryBtn" class="primary-small" disabled>集計抽出</button>
+            <button id="copySummaryBtn" disabled>集計をコピー</button>
+            <button id="downloadSummaryBtn" disabled>TSV保存</button>
+          </div>
+          <div id="summaryStatus" class="mini-status">先に所属を抜き出してください。</div>
+          <textarea id="summaryOutput" spellcheck="false" placeholder="氏名	稼働数	稼働日数	稼働C合計 の形式でここに表示します。"></textarea>
+        </div>
+
+        <div class="summary-tool">
+          <div class="affiliation-head">
+            <h2>日付別・座標集計</h2>
+            <div id="dateCoordinateMeta" class="meta">まだ集計していません</div>
+          </div>
+          <p class="affiliation-note">PDF上の文字の横位置から、各数字が「何日」の列にあるかを判定します。氏名、1日～31日の日別値、稼働日数、稼働C合計、稼働数をスプレッドシートへ貼り付けられる形で出力します。文字の並び順だけでは判定しません。</p>
+          <div class="affiliation-actions">
+            <button id="buildDateCoordinateBtn" class="primary-small" disabled>座標で日付別集計</button>
+            <button id="copyDateCoordinateBtn" disabled>日付別結果をコピー</button>
+            <button id="downloadDateCoordinateBtn" disabled>TSV保存</button>
+          </div>
+          <div id="dateCoordinateStatus" class="mini-status">PDFを抽出し、所属を選んでください。</div>
+          <textarea id="dateCoordinateOutput" spellcheck="false" placeholder="氏名	6/1	6/2	…	稼働日数	稼働C合計	稼働数 の形式で表示します。"></textarea>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="./pdf.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var els = {
+    fileInput: document.getElementById('fileInput'),
+    dropzone: document.getElementById('dropzone'),
+    filename: document.getElementById('filename'),
+    mode: document.getElementById('mode'),
+    pageRange: document.getElementById('pageRange'),
+    pageHeaders: document.getElementById('pageHeaders'),
+    normalizeSpaces: document.getElementById('normalizeSpaces'),
+    forceNoWorker: document.getElementById('forceNoWorker'),
+    extractBtn: document.getElementById('extractBtn'),
+    testBtn: document.getElementById('testBtn'),
+    progress: document.getElementById('progress'),
+    status: document.getElementById('status'),
+    debug: document.getElementById('debug'),
+    output: document.getElementById('output'),
+    meta: document.getElementById('meta'),
+    copyBtn: document.getElementById('copyBtn'),
+    downloadBtn: document.getElementById('downloadBtn'),
+    clearBtn: document.getElementById('clearBtn'),
+    headerKeywords: document.getElementById('headerKeywords'),
+    categoryPrefix: document.getElementById('categoryPrefix'),
+    startTitle: document.getElementById('startTitle'),
+    categorySelect: document.getElementById('categorySelect'),
+    affiliationSelect: document.getElementById('affiliationSelect'),
+    detectAffiliationsBtn: document.getElementById('detectAffiliationsBtn'),
+    extractAffiliationBtn: document.getElementById('extractAffiliationBtn'),
+    copyFilteredBtn: document.getElementById('copyFilteredBtn'),
+    downloadFilteredBtn: document.getElementById('downloadFilteredBtn'),
+    affiliationStatus: document.getElementById('affiliationStatus'),
+    affiliationMeta: document.getElementById('affiliationMeta'),
+    filteredOutput: document.getElementById('filteredOutput'),
+    buildSummaryBtn: document.getElementById('buildSummaryBtn'),
+    copySummaryBtn: document.getElementById('copySummaryBtn'),
+    downloadSummaryBtn: document.getElementById('downloadSummaryBtn'),
+    summaryStatus: document.getElementById('summaryStatus'),
+    summaryMeta: document.getElementById('summaryMeta'),
+    summaryOutput: document.getElementById('summaryOutput'),
+    buildDateCoordinateBtn: document.getElementById('buildDateCoordinateBtn'),
+    copyDateCoordinateBtn: document.getElementById('copyDateCoordinateBtn'),
+    downloadDateCoordinateBtn: document.getElementById('downloadDateCoordinateBtn'),
+    dateCoordinateStatus: document.getElementById('dateCoordinateStatus'),
+    dateCoordinateMeta: document.getElementById('dateCoordinateMeta'),
+    dateCoordinateOutput: document.getElementById('dateCoordinateOutput')
+  };
+
+  var selectedFile = null;
+  var lastOutput = '';
+  var lastMode = 'layout';
+  var debugLines = [];
+  var affiliationGroups = {};
+  var affiliationOrder = [];
+  var categoryOrder = [];
+  var detectedBlocks = [];
+  var coordinatePageData = {};
+  var coordinateTableCache = null;
+
+  if (!window.pdfjsLib) {
+    setStatus('PDF.jsを読み込めませんでした。pdf.min.js が index.html と同じ場所にあるか確認してください。', 'error');
+    return;
+  }
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
+  addDebug('PDF.js version: ' + (pdfjsLib.version || 'unknown'));
+  addDebug('UserAgent: ' + navigator.userAgent);
+
+  function addDebug(message) {
+    var line = new Date().toLocaleTimeString() + '  ' + message;
+    debugLines.push(line);
+    if (debugLines.length > 80) debugLines.shift();
+    els.debug.textContent = '診断ログ：\n' + debugLines.join('\n');
+  }
+
+  function setStatus(message, type) {
+    els.status.textContent = message;
+    els.status.className = type ? 'status ' + type : 'status';
+  }
+
+  function formatError(error) {
+    var parts = [];
+    if (error && error.name) parts.push(error.name);
+    if (error && error.message) parts.push(error.message);
+    if (!parts.length) parts.push(String(error));
+    return parts.join(': ');
+  }
+
+  function setFile(file) {
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+      setStatus('PDFファイルを選んでください。', 'error');
+      return;
+    }
+    selectedFile = file;
+    els.filename.textContent = file.name + '（' + formatBytes(file.size) + '）';
+    els.extractBtn.disabled = false;
+    els.testBtn.disabled = false;
+    setStatus('準備できました。「テキストを抽出」を押してください。');
+    addDebug('PDF selected: ' + file.name + ' / ' + file.size + ' bytes');
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function readFileAsArrayBuffer(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(reader.error || new Error('FileReaderでPDFを読めませんでした。')); };
+      reader.onabort = function () { reject(new Error('PDFの読み込みが中断されました。')); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function parsePageRange(text, maxPage) {
+    if (!text || !text.replace(/\s/g, '')) {
+      var all = [];
+      for (var i = 1; i <= maxPage; i++) all.push(i);
+      return all;
+    }
+    var pages = [];
+    var seen = {};
+    var tokens = text.split(',');
+    for (var t = 0; t < tokens.length; t++) {
+      var part = tokens[t].replace(/^\s+|\s+$/g, '');
+      if (!part) continue;
+      var range = /^(\d+)\s*-\s*(\d+)$/.exec(part);
+      if (range) {
+        var start = Number(range[1]);
+        var end = Number(range[2]);
+        if (start > end) { var tmp = start; start = end; end = tmp; }
+        for (var p = start; p <= end; p++) {
+          if (p >= 1 && p <= maxPage && !seen[p]) { pages.push(p); seen[p] = true; }
+        }
+      } else if (/^\d+$/.test(part)) {
+        var page = Number(part);
+        if (page >= 1 && page <= maxPage && !seen[page]) { pages.push(page); seen[page] = true; }
+      } else {
+        throw new Error('対象ページの指定「' + part + '」を読めません。例：1-3, 7, 10-12');
+      }
+    }
+    if (!pages.length) throw new Error('対象になるページがありません。');
+    pages.sort(function (a, b) { return a - b; });
+    return pages;
+  }
+
+  function itemRecord(item, viewportHeight) {
+    var tr = item.transform || [1, 0, 0, 1, 0, 0];
+    var a = tr[0], b = tr[1], c = tr[2], d = tr[3], e = tr[4], f = tr[5];
+    var fontHeight = Math.sqrt(c * c + d * d) || Math.sqrt(a * a + b * b) || item.height || 0;
+    return {
+      text: typeof item.str === 'string' ? item.str : '',
+      x: e,
+      y: viewportHeight - f,
+      width: item.width || 0,
+      height: item.height || fontHeight,
+      fontHeight: fontHeight,
+      hasEOL: !!item.hasEOL,
+      dir: item.dir || '',
+      fontName: item.fontName || ''
+    };
+  }
+
+  function layoutText(records) {
+    var visible = [];
+    for (var i = 0; i < records.length; i++) {
+      if (records[i].text !== '') visible.push(records[i]);
+    }
+    if (!visible.length) return '';
+
+    var heights = [];
+    for (var h = 0; h < visible.length; h++) {
+      var height = visible[h].fontHeight || visible[h].height;
+      if (height > 0) heights.push(height);
+    }
+    var medianHeight = median(heights) || 10;
+    var yTolerance = Math.max(2.2, medianHeight * 0.42);
+    var sorted = visible.slice().sort(function (p, q) { return p.y - q.y || p.x - q.x; });
+    var rows = [];
+
+    for (var s = 0; s < sorted.length; s++) {
+      var item = sorted[s];
+      var row = null;
+      for (var r = 0; r < rows.length; r++) {
+        if (Math.abs(rows[r].y - item.y) <= yTolerance) { row = rows[r]; break; }
+      }
+      if (!row) {
+        row = { y: item.y, items: [] };
+        rows.push(row);
+      }
+      row.items.push(item);
+      row.y = (row.y * (row.items.length - 1) + item.y) / row.items.length;
+    }
+
+    rows.sort(function (p, q) { return p.y - q.y; });
+    var lines = [];
+    var prevY = null;
+
+    for (var ri = 0; ri < rows.length; ri++) {
+      var current = rows[ri];
+      current.items.sort(function (p, q) { return p.x - q.x; });
+      if (prevY !== null && current.y - prevY > medianHeight * 1.65) lines.push('');
+      prevY = current.y;
+
+      var line = '';
+      var previous = null;
+      for (var ii = 0; ii < current.items.length; ii++) {
+        var currentItem = current.items[ii];
+        if (!previous) {
+          line = currentItem.text;
+        } else {
+          var previousEnd = previous.x + previous.width;
+          var gap = currentItem.x - previousEnd;
+          var charWidth = estimateCharWidth(previous);
+          if (gap > charWidth * 3.2) line += '\t';
+          else if (gap > charWidth * 0.35 && !startsWithPunctuation(currentItem.text) && !endsWithOpening(previous.text)) line += ' ';
+          line += currentItem.text;
+        }
+        previous = currentItem;
+      }
+      lines.push(line.replace(/\s+$/g, ''));
+    }
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n');
+  }
+
+  function simpleText(records) {
+    var text = '';
+    for (var i = 0; i < records.length; i++) {
+      var item = records[i];
+      text += item.text;
+      if (item.hasEOL) text += '\n';
+      else if (item.text && !/\s$/.test(item.text)) text += ' ';
+    }
+    return text.replace(/[ \t]+\n/g, '\n').replace(/^\s+|\s+$/g, '');
+  }
+
+  function detailsText(records) {
+    var lines = [];
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      var text = r.text.replace(/\t/g, '\\t').replace(/\n/g, '\\n');
+      lines.push(pad4(i + 1) + '\tx=' + r.x.toFixed(2) + '\ty=' + r.y.toFixed(2) + '\tw=' + r.width.toFixed(2) + '\th=' + r.height.toFixed(2) + '\tEOL=' + (r.hasEOL ? 1 : 0) + '\t' + text);
+    }
+    return lines.join('\n');
+  }
+
+  function pad4(num) {
+    var s = String(num);
+    while (s.length < 4) s = '0' + s;
+    return s;
+  }
+
+  function estimateCharWidth(item) {
+    var count = (item.text || '').length || 1;
+    return Math.max(2, item.width / count || item.fontHeight * 0.5 || 5);
+  }
+
+  function startsWithPunctuation(text) {
+    return /^[、。，．・：；？！）」』】〕〉》…]/.test(text);
+  }
+
+  function endsWithOpening(text) {
+    return /[（「『【〔〈《]$/.test(text);
+  }
+
+  function median(values) {
+    if (!values.length) return 0;
+    var sorted = values.slice().sort(function (a, b) { return a - b; });
+    var middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  function normalizeOutput(text) {
+    if (!els.normalizeSpaces.checked) return text;
+    return text.split('\n').map(function (line) {
+      return line.replace(/[ \u3000]+/g, ' ').replace(/\s+$/g, '');
+    }).join('\n');
+  }
+
+  function makeData(arrayBuffer) {
+    return new Uint8Array(arrayBuffer.slice(0));
+  }
+
+  function getDocumentWithFallback(arrayBuffer, forceNoWorker) {
+    var params = {
+      data: makeData(arrayBuffer),
+      cMapUrl: './cmaps/',
+      cMapPacked: true,
+      useWorkerFetch: false,
+      disableFontFace: true
+    };
+    if (forceNoWorker) {
+      params.disableWorker = true;
+      addDebug('PDF.js getDocument: no worker mode');
+      return pdfjsLib.getDocument(params);
+    }
+    addDebug('PDF.js getDocument: worker mode');
+    return pdfjsLib.getDocument(params);
+  }
+
+  async function loadPdf(arrayBuffer) {
+    var firstTask = null;
+    try {
+      firstTask = getDocumentWithFallback(arrayBuffer, els.forceNoWorker.checked);
+      return await firstTask.promise;
+    } catch (firstError) {
+      addDebug('First load failed: ' + formatError(firstError));
+      if (els.forceNoWorker.checked) throw firstError;
+      try {
+        addDebug('Retry: workerなしで再試行');
+        var retryTask = getDocumentWithFallback(arrayBuffer, true);
+        return await retryTask.promise;
+      } catch (retryError) {
+        addDebug('Retry failed: ' + formatError(retryError));
+        throw retryError;
+      }
+    }
+  }
+
+  async function extract(onlyFirstPage) {
+    if (!selectedFile) return;
+    els.extractBtn.disabled = true;
+    els.testBtn.disabled = true;
+    els.progress.hidden = false;
+    els.progress.value = 0;
+    els.output.value = '';
+    els.meta.textContent = '読み込み中…';
+    setStatus('PDFを読み込んでいます…');
+    addDebug('Extract start. onlyFirstPage=' + !!onlyFirstPage);
+    coordinatePageData = {};
+    coordinateTableCache = null;
+    resetDateCoordinateResults('PDFを解析中です。');
+
+    var pdf = null;
+    try {
+      addDebug('FileReader start');
+      var arrayBuffer = await readFileAsArrayBuffer(selectedFile);
+      addDebug('FileReader done: ' + arrayBuffer.byteLength + ' bytes');
+
+      pdf = await loadPdf(arrayBuffer);
+      addDebug('PDF loaded. pages=' + pdf.numPages);
+
+      var pages = onlyFirstPage ? [1] : parsePageRange(els.pageRange.value, pdf.numPages);
+      var mode = els.mode.value;
+      var pageResults = [];
+      var jsonPages = [];
+
+      for (var i = 0; i < pages.length; i++) {
+        var pageNumber = pages[i];
+        setStatus('抽出中：' + pageNumber + 'ページ（' + (i + 1) + ' / ' + pages.length + '）');
+        els.progress.value = i / pages.length;
+        addDebug('Get page ' + pageNumber);
+
+        var page = await pdf.getPage(pageNumber);
+        var viewport = page.getViewport({ scale: 1 });
+        addDebug('Get text content page ' + pageNumber);
+        var content = await page.getTextContent({ includeMarkedContent: false, disableNormalization: false });
+        var records = [];
+        for (var ci = 0; ci < content.items.length; ci++) {
+          var contentItem = content.items[ci];
+          if (typeof contentItem.str === 'string') records.push(itemRecord(contentItem, viewport.height));
+        }
+        addDebug('Page ' + pageNumber + ' text items=' + records.length);
+
+        jsonPages.push({ page: pageNumber, width: viewport.width, height: viewport.height, items: records });
+        coordinatePageData[pageNumber] = {
+          page: pageNumber,
+          width: viewport.width,
+          height: viewport.height,
+          items: records
+        };
+        coordinateTableCache = null;
+
+        var pageText = '';
+        if (mode === 'layout') pageText = layoutText(records);
+        if (mode === 'simple') pageText = simpleText(records);
+        if (mode === 'items') pageText = detailsText(records);
+
+        if (mode !== 'json') {
+          var header = els.pageHeaders.checked ? '===== ' + pageNumber + 'ページ =====\n' : '';
+          pageResults.push(header + pageText);
+        }
+        await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      }
+
+      lastMode = mode;
+      lastOutput = mode === 'json'
+        ? JSON.stringify({ fileName: selectedFile.name, totalPages: pdf.numPages, extractedPages: pages, pages: jsonPages }, null, 2)
+        : normalizeOutput(pageResults.join('\n\n'));
+
+      els.output.value = lastOutput;
+      els.progress.value = 1;
+      els.copyBtn.disabled = !lastOutput;
+      els.downloadBtn.disabled = !lastOutput;
+      els.clearBtn.disabled = !lastOutput;
+      els.meta.textContent = selectedFile.name + ' / 全' + pdf.numPages + 'ページ中 ' + pages.length + 'ページ / ' + lastOutput.length.toLocaleString() + '文字';
+      setStatus('抽出完了しました。内容を確認してください。', 'ok');
+      addDebug('Extract done. chars=' + lastOutput.length);
+      detectAffiliations(true);
+    } catch (error) {
+      console.error(error);
+      addDebug('ERROR: ' + formatError(error));
+      var message;
+      if (error && error.name === 'PasswordException') {
+        message = 'パスワード付きPDFには、現在の試作版では対応していません。';
+      } else {
+        message = '抽出できませんでした：' + formatError(error) + '\n\n下の診断ログをコピーして教えてください。';
+      }
+      setStatus(message, 'error');
+      els.meta.textContent = '抽出に失敗しました';
+    } finally {
+      if (pdf) {
+        try {
+          addDebug('Destroy PDF');
+          await pdf.destroy();
+        } catch (cleanupError) {
+          console.warn('PDF cleanup warning', cleanupError);
+          addDebug('Cleanup warning: ' + formatError(cleanupError));
+          if (lastOutput) setStatus('抽出は完了しました。ただし、PDFの後片付け処理で警告が出ました。タブを閉じればブラウザ側の作業メモリは解放されます。', 'warning');
+        }
+      }
+      els.extractBtn.disabled = !selectedFile;
+      els.testBtn.disabled = !selectedFile;
+      setTimeout(function () { els.progress.hidden = true; }, 500);
+    }
+  }
+
+  els.fileInput.addEventListener('change', function (event) {
+    var files = event.target.files;
+    setFile(files && files[0]);
+  });
+
+  ['dragenter', 'dragover'].forEach(function (type) {
+    els.dropzone.addEventListener(type, function (event) {
+      event.preventDefault();
+      els.dropzone.classList.add('drag');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (type) {
+    els.dropzone.addEventListener(type, function (event) {
+      event.preventDefault();
+      els.dropzone.classList.remove('drag');
+    });
+  });
+  els.dropzone.addEventListener('drop', function (event) {
+    var files = event.dataTransfer && event.dataTransfer.files;
+    setFile(files && files[0]);
+  });
+  els.extractBtn.addEventListener('click', function () { extract(false); });
+  els.testBtn.addEventListener('click', function () { extract(true); });
+
+  els.copyBtn.addEventListener('click', async function () {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(els.output.value);
+      } else {
+        els.output.focus();
+        els.output.select();
+        document.execCommand('copy');
+      }
+      setStatus('コピーしました。', 'ok');
+    } catch (error) {
+      els.output.focus();
+      els.output.select();
+      document.execCommand('copy');
+      setStatus('コピーしました。', 'ok');
+    }
+  });
+
+  els.downloadBtn.addEventListener('click', function () {
+    var extension = lastMode === 'json' ? 'json' : 'txt';
+    var baseName = (selectedFile ? selectedFile.name : 'pdf').replace(/\.pdf$/i, '');
+    var blob = new Blob([els.output.value], { type: lastMode === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = baseName + '_抽出結果.' + extension;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+
+  els.clearBtn.addEventListener('click', function () {
+    els.output.value = '';
+    lastOutput = '';
+    els.copyBtn.disabled = true;
+    els.downloadBtn.disabled = true;
+    els.clearBtn.disabled = true;
+    els.meta.textContent = 'クリアしました';
+    coordinatePageData = {};
+    coordinateTableCache = null;
+    resetAffiliationResults('全文をクリアしました。');
+  });
+
+  function setAffiliationStatus(message, type) {
+    els.affiliationStatus.textContent = message;
+    els.affiliationStatus.className = type ? 'mini-status ' + type : 'mini-status';
+  }
+
+  function resetAffiliationResults(message) {
+    affiliationGroups = {};
+    affiliationOrder = [];
+    categoryOrder = [];
+    detectedBlocks = [];
+    els.categorySelect.innerHTML = '<option value="__ALL__">先に所属を検出してください</option>';
+    els.categorySelect.disabled = true;
+    els.affiliationSelect.innerHTML = '<option value="">先に所属を検出してください</option>';
+    els.affiliationSelect.disabled = true;
+    els.extractAffiliationBtn.disabled = true;
+    els.filteredOutput.value = '';
+    els.copyFilteredBtn.disabled = true;
+    els.downloadFilteredBtn.disabled = true;
+    els.affiliationMeta.textContent = 'まだ検出していません';
+    resetSummaryResults('先に所属を抜き出してください。');
+    resetDateCoordinateResults('PDFを抽出し、所属を選んでください。');
+    setAffiliationStatus(message || '所属を検出してください。');
+  }
+
+  function trimLine(line) {
+    return String(line || '').replace(/^[\s\u3000]+|[\s\u3000]+$/g, '');
+  }
+
+  function normalizedLine(line) {
+    return trimLine(line).replace(/[\s\u3000]+/g, ' ');
+  }
+
+  function isPageSeparator(line) {
+    return /^=+\s*\d+\s*ページ\s*=+$/.test(normalizedLine(line));
+  }
+
+  function headerKeywords() {
+    var raw = els.headerKeywords.value || '';
+    var parts = raw.split(/[,、]/);
+    var result = [];
+    for (var i = 0; i < parts.length; i++) {
+      var word = trimLine(parts[i]);
+      if (word) result.push(word);
+    }
+    return result;
+  }
+
+  function isTableHeader(line, keywords) {
+    var text = normalizedLine(line);
+    if (!text) return false;
+    for (var i = 0; i < keywords.length; i++) {
+      if (text.indexOf(keywords[i]) === -1) return false;
+    }
+    return true;
+  }
+
+  function findPreviousUsefulLine(lines, startIndex, minimumIndex) {
+    for (var i = startIndex; i >= minimumIndex; i--) {
+      var value = trimLine(lines[i]);
+      if (!value) continue;
+      if (isPageSeparator(value)) continue;
+      return i;
+    }
+    return -1;
+  }
+
+  function pageNumberBefore(lines, index) {
+    for (var i = index; i >= 0; i--) {
+      var match = /^=+\s*(\d+)\s*ページ\s*=+$/.exec(normalizedLine(lines[i]));
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+
+  function categoryPrefix() {
+    return trimLine(els.categoryPrefix.value || '■');
+  }
+
+  function isCategoryLine(line) {
+    var value = normalizedLine(line);
+    var prefix = categoryPrefix();
+    if (!value || !prefix || isPageSeparator(value)) return false;
+
+    // 基本は「■」で始まる行。ただしPDFによっては不可視文字や余分な文字が前に付くので、
+    // 行内に「■」があり、表見出しではなさそうなら大分類候補として扱います。
+    if (value.indexOf(prefix) === 0) return true;
+    var pos = value.indexOf(prefix);
+    if (pos > 0 && pos <= 6 && !isTableHeader(value, headerKeywords())) return true;
+    return false;
+  }
+
+  function categoryDisplayLine(lines, index) {
+    var value = normalizedLine(lines[index]);
+    var prefix = categoryPrefix();
+    var pos = value.indexOf(prefix);
+    if (pos > 0) value = value.slice(pos);
+
+    // まれにPDF抽出で「■」だけが単独行になり、次の行に「＊＊補助」などが落ちることがある。
+    // その場合だけ次の有効行を足して「■＊＊補助」として扱います。
+    var onlyPrefix = value.replace(new RegExp('[' + escapeRegExp(prefix) + '\\s\\u3000]+', 'g'), '') === '';
+    if (onlyPrefix) {
+      for (var j = index + 1; j < Math.min(lines.length, index + 4); j++) {
+        var next = normalizedLine(lines[j]);
+        if (!next || isPageSeparator(next) || isCategoryLine(next)) continue;
+        if (isTableHeader(next, headerKeywords())) break;
+        // 所属名っぽい短い英数字記号だけの行は、分類名として結合しない。
+        if (/^[*＊A-Za-z0-9_\-]+$/.test(next) && !/(費|補助|分類|集計|一覧|表)/.test(next)) break;
+        value = value + next;
+        break;
+      }
+    }
+    return value || '（大分類なし）';
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function categoryBefore(lines, index, minimumIndex) {
+    for (var i = index; i >= minimumIndex; i--) {
+      if (isCategoryLine(lines[i])) return categoryDisplayLine(lines, i);
+    }
+    return '（大分類なし）';
+  }
+
+  function looksLikeSummaryOrCategoryFragment(value) {
+    var text = normalizedLine(value);
+    if (!text) return true;
+    if (/^[*＊]+$/.test(text)) return true;
+    if (/^[0-9.,]+$/.test(text)) return true;
+    // 「■」だけが分離した直後の「＊＊補助」などは所属名ではない。
+    if (/(費|補助|分類|集計|一覧|表)/.test(text) && !/^\*{3}|^＊{3}/.test(text)) return true;
+    return false;
+  }
+
+  function findPreviousAffiliationLine(lines, startIndex, minimumIndex) {
+    for (var i = startIndex; i >= minimumIndex; i--) {
+      var value = trimLine(lines[i]);
+      if (!value) continue;
+      if (isPageSeparator(value)) continue;
+      if (isCategoryLine(value)) continue;
+      if (looksLikeSummaryOrCategoryFragment(value)) continue;
+      return i;
+    }
+    return -1;
+  }
+
+  function findNextCategoryLine(lines, startIndex, endIndex) {
+    for (var i = startIndex; i < endIndex; i++) {
+      if (isCategoryLine(lines[i])) return i;
+    }
+    return -1;
+  }
+
+  function analyzeAffiliations(text) {
+    var lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    var keywords = headerKeywords();
+    if (!keywords.length) throw new Error('表見出しの目印を1つ以上入力してください。');
+
+    var scanStart = 0;
+    var title = trimLine(els.startTitle.value);
+    if (title) {
+      var foundTitle = -1;
+      for (var ti = 0; ti < lines.length; ti++) {
+        if (normalizedLine(lines[ti]).indexOf(title) !== -1) {
+          foundTitle = ti;
+          break;
+        }
+      }
+      if (foundTitle === -1) throw new Error('指定した開始タイトル「' + title + '」が全文内に見つかりません。');
+      scanStart = foundTitle;
+    }
+
+    var headers = [];
+    for (var i = scanStart; i < lines.length; i++) {
+      if (isTableHeader(lines[i], keywords)) headers.push(i);
+    }
+    if (!headers.length) throw new Error('指定した目印をすべて含む表見出しが見つかりません。');
+
+    var blocks = [];
+    for (var h = 0; h < headers.length; h++) {
+      var headerIndex = headers[h];
+      var affiliationIndex = findPreviousAffiliationLine(lines, headerIndex - 1, scanStart);
+      var affiliation = affiliationIndex >= 0 ? trimLine(lines[affiliationIndex]) : '（所属名を特定できず）';
+      var category = categoryBefore(lines, headerIndex - 1, scanStart);
+
+      var nextHeaderIndex = h + 1 < headers.length ? headers[h + 1] : lines.length;
+      var nextAffiliationIndex = h + 1 < headers.length
+        ? findPreviousAffiliationLine(lines, nextHeaderIndex - 1, headerIndex + 1)
+        : -1;
+      var nextCategoryIndex = findNextCategoryLine(lines, headerIndex + 1, nextHeaderIndex);
+      var endIndex = nextHeaderIndex;
+      if (nextAffiliationIndex >= 0) endIndex = Math.min(endIndex, nextAffiliationIndex);
+      if (nextCategoryIndex >= 0) endIndex = Math.min(endIndex, nextCategoryIndex);
+      while (endIndex > headerIndex && !trimLine(lines[endIndex - 1])) endIndex--;
+
+      blocks.push({
+        category: category,
+        affiliation: affiliation,
+        affiliationIndex: affiliationIndex,
+        headerIndex: headerIndex,
+        endIndex: endIndex,
+        page: pageNumberBefore(lines, headerIndex),
+        lines: lines.slice(headerIndex, endIndex)
+      });
+    }
+
+    var pageTableCounts = {};
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var pageKey = String(blocks[bi].page === null ? 'unknown' : blocks[bi].page);
+      pageTableCounts[pageKey] = (pageTableCounts[pageKey] || 0) + 1;
+      blocks[bi].tableNumberOnPage = pageTableCounts[pageKey];
+      blocks[bi].globalTableNumber = bi + 1;
+    }
+    return blocks;
+  }
+
+  function rebuildAffiliationSelect(preferredAffiliation) {
+    var selectedCategory = els.categorySelect.value || '__ALL__';
+    var names = [];
+    var seen = {};
+    for (var i = 0; i < detectedBlocks.length; i++) {
+      var block = detectedBlocks[i];
+      if (selectedCategory !== '__ALL__' && block.category !== selectedCategory) continue;
+      if (!seen[block.affiliation]) {
+        seen[block.affiliation] = true;
+        names.push(block.affiliation);
+      }
+    }
+
+    els.affiliationSelect.innerHTML = '';
+    for (var j = 0; j < names.length; j++) {
+      var name = names[j];
+      var count = 0;
+      for (var k = 0; k < detectedBlocks.length; k++) {
+        if (detectedBlocks[k].affiliation === name && (selectedCategory === '__ALL__' || detectedBlocks[k].category === selectedCategory)) count++;
+      }
+      var option = document.createElement('option');
+      option.value = name;
+      option.textContent = name + '（' + count + '表）';
+      els.affiliationSelect.appendChild(option);
+    }
+    if (preferredAffiliation && seen[preferredAffiliation]) els.affiliationSelect.value = preferredAffiliation;
+    els.affiliationSelect.disabled = names.length === 0;
+    els.extractAffiliationBtn.disabled = names.length === 0;
+    els.buildDateCoordinateBtn.disabled = names.length === 0 || !hasCoordinatePageData();
+  }
+
+  function detectAffiliations(silent) {
+    try {
+      var raw = els.output.value;
+      if (!trimLine(raw)) {
+        resetAffiliationResults('先にPDFを抽出するか、全文を貼り付けてください。');
+        return;
+      }
+      var blocks = analyzeAffiliations(raw);
+      detectedBlocks = blocks;
+      affiliationGroups = {};
+      affiliationOrder = [];
+      categoryOrder = [];
+      var categorySeen = {};
+      var affiliationSeen = {};
+
+      for (var i = 0; i < blocks.length; i++) {
+        var category = blocks[i].category;
+        var name = blocks[i].affiliation;
+        if (!categorySeen[category]) { categorySeen[category] = true; categoryOrder.push(category); }
+        if (!affiliationSeen[name]) { affiliationSeen[name] = true; affiliationOrder.push(name); }
+        var key = category + '\u0000' + name;
+        if (!affiliationGroups[key]) affiliationGroups[key] = [];
+        affiliationGroups[key].push(blocks[i]);
+      }
+
+      var previousCategory = els.categorySelect.value || '__ALL__';
+      var previousAffiliation = els.affiliationSelect.value;
+      els.categorySelect.innerHTML = '';
+      var allOption = document.createElement('option');
+      allOption.value = '__ALL__';
+      allOption.textContent = 'すべての大分類';
+      els.categorySelect.appendChild(allOption);
+      for (var c = 0; c < categoryOrder.length; c++) {
+        var categoryOption = document.createElement('option');
+        categoryOption.value = categoryOrder[c];
+        categoryOption.textContent = categoryOrder[c];
+        els.categorySelect.appendChild(categoryOption);
+      }
+      if (previousCategory === '__ALL__' || categorySeen[previousCategory]) els.categorySelect.value = previousCategory;
+      els.categorySelect.disabled = false;
+      rebuildAffiliationSelect(previousAffiliation);
+
+      els.affiliationMeta.textContent = categoryOrder.length + '大分類 / ' + affiliationOrder.length + '所属 / ' + blocks.length + '表';
+      setAffiliationStatus('大分類と所属を検出しました。「すべての大分類」を選ぶと、同じ所属の別種類もまとめて抜き出せます。', 'ok');
+      if (!silent && affiliationOrder.length === 1) extractSelectedAffiliation();
+    } catch (error) {
+      resetAffiliationResults('検出できませんでした：' + formatError(error));
+      setAffiliationStatus('検出できませんでした：' + formatError(error), 'error');
+    }
+  }
+
+  function extractSelectedAffiliation() {
+    try {
+      detectAffiliations(true);
+      var category = els.categorySelect.value || '__ALL__';
+      var name = els.affiliationSelect.value;
+      if (!name) throw new Error('抜き出す所属を選んでください。');
+      var blocks = [];
+      for (var i = 0; i < detectedBlocks.length; i++) {
+        if (detectedBlocks[i].affiliation !== name) continue;
+        if (category !== '__ALL__' && detectedBlocks[i].category !== category) continue;
+        blocks.push(detectedBlocks[i]);
+      }
+      if (!blocks.length) throw new Error('該当する表がありません。');
+
+      var categoryLabel = category === '__ALL__' ? 'すべての大分類' : category;
+      var chunks = ['【大分類：' + categoryLabel + '】', '【所属：' + name + '】'];
+      var currentCategory = null;
+      var categoryTableCount = 0;
+      for (var b = 0; b < blocks.length; b++) {
+        if (blocks[b].category !== currentCategory) {
+          currentCategory = blocks[b].category;
+          categoryTableCount = 0;
+          chunks.push('===== ' + currentCategory + ' =====');
+        }
+        categoryTableCount++;
+        var label = '--- 表' + categoryTableCount;
+        if (blocks[b].page !== null) label += '（' + blocks[b].page + 'ページ）';
+        label += ' ---';
+        chunks.push(label + '\n' + blocks[b].lines.join('\n'));
+      }
+      els.filteredOutput.value = chunks.join('\n\n');
+      els.copyFilteredBtn.disabled = false;
+      els.downloadFilteredBtn.disabled = false;
+      els.buildSummaryBtn.disabled = false;
+      setAffiliationStatus('「' + name + '」を' + categoryLabel + 'から' + blocks.length + '件抜き出しました。', 'ok');
+
+      // 所属別テキストを作れた時点で、そのまま集計まで実行する。
+      // 解析できない行があった場合も、所属抽出の成功とは別に集計欄へ理由を表示する。
+      buildSummary(false);
+    } catch (error) {
+      setAffiliationStatus('抜き出せませんでした：' + formatError(error), 'error');
+    }
+  }
+
+
+  function setSummaryStatus(message, type) {
+    els.summaryStatus.textContent = message;
+    els.summaryStatus.className = type ? 'mini-status ' + type : 'mini-status';
+  }
+
+  function resetSummaryResults(message) {
+    els.summaryOutput.value = '';
+    els.summaryMeta.textContent = 'まだ集計していません';
+    els.buildSummaryBtn.disabled = !trimLine(els.filteredOutput.value);
+    els.copySummaryBtn.disabled = true;
+    els.downloadSummaryBtn.disabled = true;
+    setSummaryStatus(message || '先に所属を抜き出してください。');
+  }
+
+  function isNumericToken(token) {
+    var value = trimLine(token).replace(/,/g, '');
+    return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value);
+  }
+
+  function numericValue(token) {
+    var raw = trimLine(token).replace(/,/g, '');
+    var value = Number(raw);
+    if (!isFinite(value)) return raw;
+    return String(value);
+  }
+
+  function looksLikeIdToken(token) {
+    var value = trimLine(token);
+    if (!value) return false;
+    if (/\d/.test(value) && value.length >= 3) return true;
+    if (/^[A-Za-z][A-Za-z0-9_\-*＊]{3,}$/.test(value)) return true;
+    return false;
+  }
+
+  function looksLikeAbbreviation(token) {
+    var value = trimLine(token);
+    return /^[A-Za-zＡ-Ｚａ-ｚ]{1,6}$/.test(value);
+  }
+
+  function cleanPersonName(value) {
+    return trimLine(value)
+      .replace(/^[{｛\[【]+/, '')
+      .replace(/[}｝\]】]+$/, '')
+      .replace(/[\s\u3000]+/g, ' ');
+  }
+
+  function parseSummaryLine(rawLine) {
+    var raw = trimLine(rawLine);
+    if (!raw || isPageSeparator(raw)) return null;
+    if (/^(?:【|=====|---)/.test(raw)) return null;
+    if (raw.indexOf('業者名') !== -1 && raw.indexOf('氏名') !== -1) return null;
+
+    // レイアウト抽出でタブが残っていれば、列位置を優先する。
+    var tabCells = raw.split(/\t+/).map(trimLine).filter(function (cell) { return !!cell; });
+    if (tabCells.length >= 3) {
+      var tabNumbers = [];
+      for (var tc = 3; tc < tabCells.length; tc++) {
+        var cellTokens = tabCells[tc].split(/[\s\u3000]+/);
+        for (var ct = 0; ct < cellTokens.length; ct++) {
+          if (isNumericToken(cellTokens[ct])) tabNumbers.push(cellTokens[ct]);
+        }
+      }
+      if (tabNumbers.length >= 3) {
+        return {
+          name: cleanPersonName(tabCells[1]),
+          numbers: tabNumbers,
+          source: raw
+        };
+      }
+    }
+
+    // タブがない場合は、行末から連続する数字を日別値＋集計値として扱う。
+    var tokens = normalizedLine(raw).split(' ');
+    var numberStart = tokens.length;
+    while (numberStart > 0 && isNumericToken(tokens[numberStart - 1])) numberStart--;
+    var numberTokens = tokens.slice(numberStart);
+    var prefixTokens = tokens.slice(0, numberStart);
+    if (numberTokens.length < 3 || prefixTokens.length < 2) return null;
+
+    // IDが純数字で日別値の先頭に巻き込まれた場合を、桁数から可能な範囲で除外する。
+    if (numberTokens.length >= 4) {
+      var firstNumberRaw = trimLine(numberTokens[0]).replace(/,/g, '');
+      if (/^\d{4,}$/.test(firstNumberRaw)) numberTokens.shift();
+    }
+    if (numberTokens.length < 3) return null;
+
+    var idIndex = -1;
+    for (var pi = prefixTokens.length - 1; pi >= 1; pi--) {
+      if (looksLikeIdToken(prefixTokens[pi])) {
+        idIndex = pi;
+        break;
+      }
+    }
+
+    var beforeIdTokens;
+    if (idIndex >= 1) {
+      // 文字を含むIDが残っている場合：IDより前が「業者名＋氏名」。
+      beforeIdTokens = prefixTokens.slice(0, idIndex);
+    } else {
+      // 数字だけのIDは、上で日別数字の先頭から除外済み。
+      // この場合、残った接頭部を丸ごと「業者名＋氏名」として扱う。
+      beforeIdTokens = prefixTokens.slice();
+    }
+
+    // 氏名は「山田 太郎」のように空白で2語に分かれる前提を優先する。
+    // 業者名が複数語でも、ID直前（または数字列直前）の最後の2語を氏名として取得する。
+    // 1語しか残らない場合は、その1語を氏名として扱う。
+    var nameTokens;
+    if (beforeIdTokens.length >= 3) {
+      nameTokens = beforeIdTokens.slice(-2);
+    } else if (beforeIdTokens.length >= 2) {
+      nameTokens = beforeIdTokens.slice(1);
+    } else {
+      nameTokens = [];
+    }
+
+    var name = cleanPersonName(nameTokens.join(' '));
+    if (!name) return null;
+    return { name: name, numbers: numberTokens, source: raw };
+  }
+
+  function buildSummary(silent) {
+    try {
+      var text = els.filteredOutput.value;
+      if (!trimLine(text)) throw new Error('先に所属を抜き出してください。');
+
+      var lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+      var rows = [];
+      for (var i = 0; i < lines.length; i++) {
+        var parsed = parseSummaryLine(lines[i]);
+        if (!parsed) continue;
+        var numbers = parsed.numbers;
+        rows.push({
+          name: parsed.name,
+          workCount: numericValue(numbers[numbers.length - 1]),
+          workDays: numbers.length - 2,
+          cTotal: numericValue(numbers[numbers.length - 2])
+        });
+      }
+
+      if (!rows.length) throw new Error('集計できるデータ行が見つかりませんでした。');
+
+      var outputLines = ['氏名\t稼働数\t稼働日数\t稼働C合計'];
+      for (var r = 0; r < rows.length; r++) {
+        outputLines.push([
+          rows[r].name,
+          rows[r].workCount,
+          rows[r].workDays,
+          rows[r].cTotal
+        ].join('\t'));
+      }
+
+      els.summaryOutput.value = outputLines.join('\n');
+      els.summaryMeta.textContent = rows.length + '件 / 4列';
+      els.buildSummaryBtn.disabled = false;
+      els.copySummaryBtn.disabled = false;
+      els.downloadSummaryBtn.disabled = false;
+      setSummaryStatus(rows.length + '件を集計しました。スプレッドシートへそのまま貼り付けられます。', 'ok');
+    } catch (error) {
+      if (!silent) setSummaryStatus('集計できませんでした：' + formatError(error), 'error');
+      els.summaryMeta.textContent = '集計できませんでした';
+      els.copySummaryBtn.disabled = true;
+      els.downloadSummaryBtn.disabled = true;
+    }
+  }
+
+
+  function setDateCoordinateStatus(message, type) {
+    els.dateCoordinateStatus.textContent = message;
+    els.dateCoordinateStatus.className = type ? 'mini-status ' + type : 'mini-status';
+  }
+
+  function hasCoordinatePageData() {
+    for (var key in coordinatePageData) {
+      if (Object.prototype.hasOwnProperty.call(coordinatePageData, key)) return true;
+    }
+    return false;
+  }
+
+  function resetDateCoordinateResults(message) {
+    els.dateCoordinateOutput.value = '';
+    els.dateCoordinateMeta.textContent = 'まだ集計していません';
+    els.copyDateCoordinateBtn.disabled = true;
+    els.downloadDateCoordinateBtn.disabled = true;
+    els.buildDateCoordinateBtn.disabled = !hasCoordinatePageData() || els.affiliationSelect.disabled;
+    setDateCoordinateStatus(message || 'PDFを抽出し、所属を選んでください。');
+  }
+
+  function compactCoordinateText(value) {
+    return String(value || '').replace(/[\s\u3000]+/g, '');
+  }
+
+  function groupRowsByCoordinate(records) {
+    var visible = [];
+    var heights = [];
+    for (var i = 0; i < records.length; i++) {
+      if (!trimLine(records[i].text)) continue;
+      visible.push(records[i]);
+      var h = records[i].fontHeight || records[i].height;
+      if (h > 0) heights.push(h);
+    }
+    var medianHeight = median(heights) || 4;
+    var yTolerance = Math.max(1.2, medianHeight * 0.58);
+    var sorted = visible.slice().sort(function (a, b) { return a.y - b.y || a.x - b.x; });
+    var rows = [];
+
+    for (var s = 0; s < sorted.length; s++) {
+      var item = sorted[s];
+      var bestRow = null;
+      var bestDistance = Infinity;
+      for (var r = 0; r < rows.length; r++) {
+        var distance = Math.abs(rows[r].y - item.y);
+        if (distance <= yTolerance && distance < bestDistance) {
+          bestRow = rows[r];
+          bestDistance = distance;
+        }
+      }
+      if (!bestRow) {
+        bestRow = { y: item.y, items: [] };
+        rows.push(bestRow);
+      }
+      bestRow.items.push(item);
+      bestRow.y = (bestRow.y * (bestRow.items.length - 1) + item.y) / bestRow.items.length;
+    }
+
+    rows.sort(function (a, b) { return a.y - b.y; });
+    for (var ri = 0; ri < rows.length; ri++) {
+      rows[ri].items.sort(function (a, b) { return a.x - b.x; });
+    }
+    return rows;
+  }
+
+  function coordinateCenterX(item) {
+    return item.x + (item.width || 0) / 2;
+  }
+
+  function makeHeaderCandidate(items, startIndex, endIndex) {
+    var first = items[startIndex];
+    var last = items[endIndex];
+    var text = '';
+    for (var i = startIndex; i <= endIndex; i++) text += compactCoordinateText(items[i].text);
+    return {
+      text: text,
+      x: first.x,
+      width: Math.max(0, last.x + last.width - first.x),
+      centerX: (first.x + last.x + last.width) / 2,
+      startIndex: startIndex,
+      endIndex: endIndex
+    };
+  }
+
+  function buildHeaderCandidates(row) {
+    var candidates = [];
+    var items = row.items;
+    for (var i = 0; i < items.length; i++) {
+      var combined = '';
+      for (var j = i; j < items.length && j < i + 4; j++) {
+        if (j > i) {
+          var previous = items[j - 1];
+          var gap = items[j].x - (previous.x + previous.width);
+          var maxGap = Math.max(2.5, (previous.fontHeight || previous.height || 4) * 1.15);
+          if (gap > maxGap) break;
+        }
+        combined += compactCoordinateText(items[j].text);
+        if (combined) candidates.push(makeHeaderCandidate(items, i, j));
+      }
+    }
+    return candidates;
+  }
+
+  function findHeaderCandidate(candidates, expectedText) {
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i].text === expectedText) return candidates[i];
+    }
+    return null;
+  }
+
+  function isDateHeaderValue(value) {
+    return /^\d{1,2}\/(?:[1-9]|[12]\d|3[01])$/.test(value);
+  }
+
+  function uniqueDateCandidates(candidates) {
+    var dates = [];
+    var used = {};
+    for (var i = 0; i < candidates.length; i++) {
+      if (!isDateHeaderValue(candidates[i].text)) continue;
+      var key = candidates[i].text + '@' + candidates[i].centerX.toFixed(2);
+      if (used[key]) continue;
+      used[key] = true;
+      dates.push(candidates[i]);
+    }
+    dates.sort(function (a, b) { return a.centerX - b.centerX; });
+
+    // 同じ日付が、単体候補と結合候補の両方で重複した場合は、幅の狭い方を残す。
+    var compact = [];
+    for (var d = 0; d < dates.length; d++) {
+      var previous = compact.length ? compact[compact.length - 1] : null;
+      if (previous && previous.text === dates[d].text && Math.abs(previous.centerX - dates[d].centerX) < 1.5) {
+        if (dates[d].width < previous.width) compact[compact.length - 1] = dates[d];
+      } else {
+        compact.push(dates[d]);
+      }
+    }
+    return compact;
+  }
+
+  function parseCoordinateHeaderRow(row) {
+    var candidates = buildHeaderCandidates(row);
+    var company = findHeaderCandidate(candidates, '業者名');
+    var name = findHeaderCandidate(candidates, '氏名');
+    var abbreviation = findHeaderCandidate(candidates, '略称');
+    var total = findHeaderCandidate(candidates, '総計');
+    var workCount = findHeaderCandidate(candidates, '稼働数');
+    var dates = uniqueDateCandidates(candidates);
+
+    if (!company || !name || !abbreviation || !total || !workCount || dates.length < 20) return null;
+
+    var idItems = [];
+    for (var i = 0; i < row.items.length; i++) {
+      var cx = coordinateCenterX(row.items[i]);
+      if (cx > name.centerX + 3 && cx < abbreviation.centerX - 3) idItems.push(row.items[i]);
+    }
+    var idCenter;
+    if (idItems.length) {
+      var idLeft = idItems[0].x;
+      var idRight = idItems[idItems.length - 1].x + idItems[idItems.length - 1].width;
+      idCenter = (idLeft + idRight) / 2;
+    } else {
+      idCenter = (name.centerX + abbreviation.centerX) / 2;
+    }
+
+    var columns = [
+      { key: 'company', label: '業者名', centerX: company.centerX },
+      { key: 'name', label: '氏名', centerX: name.centerX },
+      { key: 'id', label: 'ID', centerX: idCenter },
+      { key: 'abbreviation', label: '略称', centerX: abbreviation.centerX }
+    ];
+    for (var d = 0; d < dates.length; d++) {
+      var dayMatch = /\/(\d{1,2})$/.exec(dates[d].text);
+      columns.push({
+        key: 'day_' + (dayMatch ? Number(dayMatch[1]) : (d + 1)),
+        label: dates[d].text,
+        centerX: dates[d].centerX,
+        isDay: true
+      });
+    }
+    columns.push({ key: 'total', label: '総計', centerX: total.centerX });
+    columns.push({ key: 'workCount', label: '稼働数', centerX: workCount.centerX });
+    columns.sort(function (a, b) { return a.centerX - b.centerX; });
+
+    for (var c = 0; c < columns.length; c++) {
+      columns[c].leftBoundary = c === 0 ? -Infinity : (columns[c - 1].centerX + columns[c].centerX) / 2;
+      columns[c].rightBoundary = c === columns.length - 1 ? Infinity : (columns[c].centerX + columns[c + 1].centerX) / 2;
+    }
+    return { y: row.y, columns: columns };
+  }
+
+  function columnForCoordinateItem(columns, item) {
+    var center = coordinateCenterX(item);
+    for (var i = 0; i < columns.length; i++) {
+      if (center >= columns[i].leftBoundary && center < columns[i].rightBoundary) return columns[i];
+    }
+    return null;
+  }
+
+  function sortedCellParts(items) {
+    return (items || []).slice().sort(function (a, b) { return a.x - b.x; }).map(function (item) {
+      return trimLine(item.text);
+    }).filter(function (value) { return !!value; });
+  }
+
+  function coordinateTextCell(items, separator) {
+    return sortedCellParts(items).join(separator === undefined ? '' : separator);
+  }
+
+  function coordinateNumericCell(items) {
+    var raw = coordinateTextCell(items, '').replace(/,/g, '');
+    if (!raw || !isNumericToken(raw)) return '';
+    return numericValue(raw);
+  }
+
+  function parseCoordinateDataRow(row, header) {
+    var cells = {};
+    for (var i = 0; i < row.items.length; i++) {
+      var column = columnForCoordinateItem(header.columns, row.items[i]);
+      if (!column) continue;
+      if (!cells[column.key]) cells[column.key] = [];
+      cells[column.key].push(row.items[i]);
+    }
+
+    var name = cleanPersonName(coordinateTextCell(cells.name, ' '));
+    var daily = {};
+    var numericCount = 0;
+    for (var c = 0; c < header.columns.length; c++) {
+      var current = header.columns[c];
+      if (!current.isDay) continue;
+      var dayValue = coordinateNumericCell(cells[current.key]);
+      if (dayValue !== '') {
+        daily[current.label] = dayValue;
+        numericCount++;
+      }
+    }
+    var total = coordinateNumericCell(cells.total);
+    var workCount = coordinateNumericCell(cells.workCount);
+    if (total !== '') numericCount++;
+    if (workCount !== '') numericCount++;
+
+    if (!name || numericCount === 0) return null;
+    return {
+      company: coordinateTextCell(cells.company, ' '),
+      name: name,
+      id: coordinateTextCell(cells.id, ''),
+      abbreviation: coordinateTextCell(cells.abbreviation, ''),
+      daily: daily,
+      total: total,
+      workCount: workCount
+    };
+  }
+
+  function buildCoordinateTables() {
+    if (coordinateTableCache) return coordinateTableCache;
+    var result = [];
+    var pageNumbers = [];
+    for (var pageKey in coordinatePageData) {
+      if (Object.prototype.hasOwnProperty.call(coordinatePageData, pageKey)) pageNumbers.push(Number(pageKey));
+    }
+    pageNumbers.sort(function (a, b) { return a - b; });
+
+    for (var p = 0; p < pageNumbers.length; p++) {
+      var pageNumber = pageNumbers[p];
+      var pageData = coordinatePageData[pageNumber];
+      var rows = groupRowsByCoordinate(pageData.items);
+      var headers = [];
+      for (var r = 0; r < rows.length; r++) {
+        var parsedHeader = parseCoordinateHeaderRow(rows[r]);
+        if (parsedHeader) headers.push({ rowIndex: r, header: parsedHeader });
+      }
+
+      for (var h = 0; h < headers.length; h++) {
+        var startRow = headers[h].rowIndex + 1;
+        var endRow = h + 1 < headers.length ? headers[h + 1].rowIndex : rows.length;
+        var dataRows = [];
+        for (var dr = startRow; dr < endRow; dr++) {
+          var parsedRow = parseCoordinateDataRow(rows[dr], headers[h].header);
+          if (parsedRow) dataRows.push(parsedRow);
+        }
+        result.push({
+          page: pageNumber,
+          tableNumberOnPage: h + 1,
+          globalTableNumber: result.length + 1,
+          headerY: headers[h].header.y,
+          columns: headers[h].header.columns,
+          rows: dataRows
+        });
+      }
+    }
+    coordinateTableCache = result;
+    return result;
+  }
+
+  function selectedAffiliationBlocks() {
+    var category = els.categorySelect.value || '__ALL__';
+    var name = els.affiliationSelect.value;
+    if (!name) throw new Error('所属を選んでください。');
+    var blocks = [];
+    for (var i = 0; i < detectedBlocks.length; i++) {
+      if (detectedBlocks[i].affiliation !== name) continue;
+      if (category !== '__ALL__' && detectedBlocks[i].category !== category) continue;
+      blocks.push(detectedBlocks[i]);
+    }
+    if (!blocks.length) throw new Error('選択した所属の表がありません。');
+    return blocks;
+  }
+
+  function matchCoordinateTables(blocks, allTables) {
+    var matches = [];
+    var used = {};
+    for (var i = 0; i < blocks.length; i++) {
+      var matched = null;
+      for (var t = 0; t < allTables.length; t++) {
+        var key = allTables[t].page + ':' + allTables[t].tableNumberOnPage;
+        if (used[key]) continue;
+        if (blocks[i].page === allTables[t].page && blocks[i].tableNumberOnPage === allTables[t].tableNumberOnPage) {
+          matched = allTables[t];
+          used[key] = true;
+          break;
+        }
+      }
+      if (!matched && blocks[i].globalTableNumber && allTables[blocks[i].globalTableNumber - 1]) {
+        var fallback = allTables[blocks[i].globalTableNumber - 1];
+        var fallbackKey = fallback.page + ':' + fallback.tableNumberOnPage;
+        if (!used[fallbackKey]) {
+          matched = fallback;
+          used[fallbackKey] = true;
+        }
+      }
+      if (matched) matches.push(matched);
+    }
+    return matches;
+  }
+
+  function buildDateCoordinateSummary() {
+    try {
+      if (!hasCoordinatePageData()) throw new Error('PDFの座標情報がありません。先にPDFを抽出してください。');
+      if (!detectedBlocks.length) detectAffiliations(true);
+      var blocks = selectedAffiliationBlocks();
+      var allTables = buildCoordinateTables();
+      if (!allTables.length) throw new Error('日付見出しを持つ表を座標から検出できませんでした。');
+      var tables = matchCoordinateTables(blocks, allTables);
+      if (!tables.length) throw new Error('選択した所属とPDF上の表を対応付けられませんでした。');
+
+      var dateLabels = [];
+      var dateSeen = {};
+      for (var t = 0; t < tables.length; t++) {
+        for (var c = 0; c < tables[t].columns.length; c++) {
+          var column = tables[t].columns[c];
+          if (column.isDay && !dateSeen[column.label]) {
+            dateSeen[column.label] = true;
+            dateLabels.push(column.label);
+          }
+        }
+      }
+      dateLabels.sort(function (a, b) {
+        var ap = a.split('/').map(Number);
+        var bp = b.split('/').map(Number);
+        return ap[0] - bp[0] || ap[1] - bp[1];
+      });
+
+      var outputRows = [];
+      for (var ti = 0; ti < tables.length; ti++) {
+        for (var ri = 0; ri < tables[ti].rows.length; ri++) outputRows.push(tables[ti].rows[ri]);
+      }
+      if (!outputRows.length) throw new Error('選択した表に集計できる人物行がありませんでした。');
+
+      var headerLine = ['氏名'].concat(dateLabels).concat(['稼働日数', '稼働C合計', '稼働数']);
+      var lines = [headerLine.join('\t')];
+      for (var r = 0; r < outputRows.length; r++) {
+        var values = [outputRows[r].name];
+        var workDays = 0;
+        for (var d = 0; d < dateLabels.length; d++) {
+          var value = Object.prototype.hasOwnProperty.call(outputRows[r].daily, dateLabels[d])
+            ? outputRows[r].daily[dateLabels[d]]
+            : '';
+          if (value !== '') workDays++;
+          values.push(value);
+        }
+        values.push(String(workDays));
+        values.push(outputRows[r].total);
+        values.push(outputRows[r].workCount);
+        lines.push(values.join('\t'));
+      }
+
+      els.dateCoordinateOutput.value = lines.join('\n');
+      els.dateCoordinateMeta.textContent = tables.length + '表 / ' + outputRows.length + '名 / ' + dateLabels.length + '日列';
+      els.copyDateCoordinateBtn.disabled = false;
+      els.downloadDateCoordinateBtn.disabled = false;
+      els.buildDateCoordinateBtn.disabled = false;
+      var unmatched = blocks.length - tables.length;
+      var message = outputRows.length + '名を、PDF上の横位置から日付別に集計しました。';
+      if (unmatched > 0) message += ' なお、' + unmatched + '表は座標表と対応付けられませんでした。';
+      setDateCoordinateStatus(message, unmatched > 0 ? 'warning' : 'ok');
+    } catch (error) {
+      els.dateCoordinateMeta.textContent = '集計できませんでした';
+      els.copyDateCoordinateBtn.disabled = true;
+      els.downloadDateCoordinateBtn.disabled = true;
+      setDateCoordinateStatus('日付別集計できませんでした：' + formatError(error), 'error');
+    }
+  }
+
+  function copyTextArea(textarea, successMessage) {
+    var text = textarea.value;
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        setAffiliationStatus(successMessage, 'ok');
+      }).catch(function () {
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        setAffiliationStatus(successMessage, 'ok');
+      });
+    } else {
+      textarea.focus();
+      textarea.select();
+      document.execCommand('copy');
+      setAffiliationStatus(successMessage, 'ok');
+    }
+  }
+
+  function safeFilePart(value) {
+    return String(value || '所属').replace(/[\\/:*?"<>|]/g, '_').replace(/[\s\u3000]+/g, '_').slice(0, 80);
+  }
+
+  els.detectAffiliationsBtn.addEventListener('click', function () { detectAffiliations(false); });
+  els.categorySelect.addEventListener('change', function () {
+    rebuildAffiliationSelect(els.affiliationSelect.value);
+    els.filteredOutput.value = '';
+    els.copyFilteredBtn.disabled = true;
+    els.downloadFilteredBtn.disabled = true;
+    resetSummaryResults('大分類を切り替えました。所属を抜き出し直してください。');
+    resetDateCoordinateResults('大分類を切り替えました。所属を選び直してください。');
+    setAffiliationStatus('大分類を切り替えました。所属を選んで抜き出してください。');
+  });
+  els.extractAffiliationBtn.addEventListener('click', extractSelectedAffiliation);
+  els.copyFilteredBtn.addEventListener('click', function () { copyTextArea(els.filteredOutput, '所属別結果をコピーしました。'); });
+  els.downloadFilteredBtn.addEventListener('click', function () {
+    var name = els.affiliationSelect.value || '所属';
+    var category = els.categorySelect.value === '__ALL__' ? '全分類' : (els.categorySelect.value || '分類');
+    var baseName = (selectedFile ? selectedFile.name : 'pdf').replace(/\.pdf$/i, '');
+    var blob = new Blob([els.filteredOutput.value], { type: 'text/plain;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = baseName + '_' + safeFilePart(category) + '_' + safeFilePart(name) + '_抽出.txt';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    setAffiliationStatus('所属別結果を保存しました。', 'ok');
+  });
+
+  els.buildSummaryBtn.addEventListener('click', function () { buildSummary(false); });
+  els.copySummaryBtn.addEventListener('click', function () {
+    var text = els.summaryOutput.value;
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        setSummaryStatus('集計結果をコピーしました。', 'ok');
+      }).catch(function () {
+        els.summaryOutput.focus();
+        els.summaryOutput.select();
+        document.execCommand('copy');
+        setSummaryStatus('集計結果をコピーしました。', 'ok');
+      });
+    } else {
+      els.summaryOutput.focus();
+      els.summaryOutput.select();
+      document.execCommand('copy');
+      setSummaryStatus('集計結果をコピーしました。', 'ok');
+    }
+  });
+  els.downloadSummaryBtn.addEventListener('click', function () {
+    var name = els.affiliationSelect.value || '所属';
+    var category = els.categorySelect.value === '__ALL__' ? '全分類' : (els.categorySelect.value || '分類');
+    var baseName = (selectedFile ? selectedFile.name : 'pdf').replace(/\.pdf$/i, '');
+    var blob = new Blob(['\ufeff' + els.summaryOutput.value], { type: 'text/tab-separated-values;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = baseName + '_' + safeFilePart(category) + '_' + safeFilePart(name) + '_稼働集計.tsv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    setSummaryStatus('集計結果をTSVで保存しました。', 'ok');
+  });
+  els.buildDateCoordinateBtn.addEventListener('click', buildDateCoordinateSummary);
+  els.copyDateCoordinateBtn.addEventListener('click', function () {
+    var text = els.dateCoordinateOutput.value;
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        setDateCoordinateStatus('日付別結果をコピーしました。', 'ok');
+      }).catch(function () {
+        els.dateCoordinateOutput.focus();
+        els.dateCoordinateOutput.select();
+        document.execCommand('copy');
+        setDateCoordinateStatus('日付別結果をコピーしました。', 'ok');
+      });
+    } else {
+      els.dateCoordinateOutput.focus();
+      els.dateCoordinateOutput.select();
+      document.execCommand('copy');
+      setDateCoordinateStatus('日付別結果をコピーしました。', 'ok');
+    }
+  });
+  els.downloadDateCoordinateBtn.addEventListener('click', function () {
+    var name = els.affiliationSelect.value || '所属';
+    var category = els.categorySelect.value === '__ALL__' ? '全分類' : (els.categorySelect.value || '分類');
+    var baseName = (selectedFile ? selectedFile.name : 'pdf').replace(/\.pdf$/i, '');
+    var blob = new Blob(['\ufeff' + els.dateCoordinateOutput.value], { type: 'text/tab-separated-values;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = baseName + '_' + safeFilePart(category) + '_' + safeFilePart(name) + '_日付別座標集計.tsv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    setDateCoordinateStatus('日付別結果をTSVで保存しました。', 'ok');
+  });
+
+  els.filteredOutput.addEventListener('input', function () {
+    els.buildSummaryBtn.disabled = !trimLine(els.filteredOutput.value);
+    els.summaryMeta.textContent = '所属別結果が編集されました';
+    setSummaryStatus('内容を編集したため、もう一度「集計抽出」を押してください。');
+    els.copySummaryBtn.disabled = true;
+    els.downloadSummaryBtn.disabled = true;
+  });
+
+  els.output.addEventListener('input', function () {
+    if (!trimLine(els.output.value)) {
+      resetAffiliationResults('全文が空です。');
+      return;
+    }
+    els.affiliationMeta.textContent = '全文が編集されました';
+    resetDateCoordinateResults('全文を編集したため、所属を検出し直してください。');
+    setAffiliationStatus('全文を編集したため、もう一度「所属を検出」を押してください。');
+  });
+
+})();
+</script>
+</body>
+</html>
