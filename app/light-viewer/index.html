@@ -132,6 +132,8 @@
     overflow:hidden;
     touch-action:none;
   }
+  .viewer-stage.zoomed{cursor:grab;}
+  .viewer-stage.zoomed.dragging{cursor:grabbing;}
   .page-surface{
     max-width:96%;
     max-height:94%;
@@ -905,6 +907,7 @@
     if (!page) return;
     page.rotation = ((page.rotation || 0) + delta + 360) % 360;
     panX = 0; panY = 0; zoom = 1;
+    viewerStage.classList.remove("zoomed");
     fitPageSurface(true);
   }
   // Pre-rotation the img is sized so that after CSS rotate() it fits the stage:
@@ -943,6 +946,7 @@
     if (zoom === 1) { panX = 0; panY = 0; }
     clampPan();
     applyTransform(animate);
+    viewerStage.classList.toggle("zoomed", zoom > 1.001);
   }
   function resetZoom(animate) { setZoom(1, animate); }
 
@@ -1006,6 +1010,25 @@
     }
     if (zoom < 1.04) resetZoom(true);
     touchState = null;
+  });
+
+  /* mouse: drag to pan when zoomed in */
+  let mouseDragState = null;
+  viewerStage.addEventListener("mousedown", (e) => {
+    if (zoom <= 1 || e.button !== 0 || e.target.closest("button")) return;
+    mouseDragState = { startX: e.clientX, startY: e.clientY, startPanX: panX, startPanY: panY };
+    viewerStage.classList.add("dragging");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!mouseDragState) return;
+    panX = mouseDragState.startPanX + (e.clientX - mouseDragState.startX);
+    panY = mouseDragState.startPanY + (e.clientY - mouseDragState.startY);
+    clampPan();
+    applyTransform(false);
+  });
+  window.addEventListener("mouseup", () => {
+    if (mouseDragState) { mouseDragState = null; viewerStage.classList.remove("dragging"); }
   });
 
   /* ---------------- Keyboard ---------------- */
