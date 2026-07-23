@@ -184,7 +184,7 @@
 
   <details class="dict">
     <summary>マスキング辞書（氏名・会社名などを登録）</summary>
-    <p class="hint">氏名や会社名は自動検出できないため、ここに登録した言葉が置き換わります。登録内容はこの画面を開いている間だけ保持されます。</p>
+    <p class="hint">氏名や会社名は自動検出できないため、ここに登録した言葉が置き換わります。登録内容はこの端末のブラウザに保存され、保存から24時間で自動的に削除されます。</p>
     <div class="dict-add">
       <input type="text" id="dictWord" placeholder="例：山田太郎">
       <select id="dictCat">
@@ -209,6 +209,10 @@
         <button class="btn-dark btn-sm" id="btnDictImport">上の内容を読み込む</button>
       </div>
     </details>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn-ghost btn-sm" id="btnClearStorage">辞書・対応表を今すぐ削除</button>
+    </div>
+    <p class="hint" id="storageStatus"></p>
   </details>
 
   <button class="btn-primary" id="btnMask">墨ぬりする（マスキング実行）</button>
@@ -242,7 +246,7 @@
       <thead><tr><th>トークン</th><th>元の値</th></tr></thead>
       <tbody id="mapBody"></tbody>
     </table>
-    <div class="warn">⚠ 対応表はこのブラウザ画面の中にだけあります。画面を閉じたり再読み込みすると消えるため、復元（手順4）まで画面を開いたままにしてください。</div>
+    <div class="warn">⚠ 対応表（氏名・連絡先などの元の値そのもの）はこの端末のブラウザに保存され、保存から24時間で自動的に削除されます。共有端末で使う場合は、復元（手順4）が終わったら「辞書・対応表を今すぐ削除」で早めに消してください。</div>
     <div class="btn-row"><button class="btn-ghost btn-sm" id="btnCopyMap">対応表をコピー（控え用）</button></div>
   </div>
 </div>
@@ -276,7 +280,7 @@
   </div>
 </div>
 
-<footer>マスキング前の文章と復元処理はブラウザ内だけで扱います。<br>「AIで開く」を押した場合は、マスク後の文章のみ各AIサービスへ渡されます。</footer>
+<footer>マスキング前の文章と復元処理はブラウザ内だけで扱います。<br>「AIで開く」を押した場合は、マスク後の文章のみ各AIサービスへ渡されます。<br>マスキング辞書と対応表はこの端末に24時間だけ保存され、自動的に削除されます。</footer>
 </div>
 
 <div id="toast"></div>
@@ -298,6 +302,48 @@
   var confirmedSourceText = null; // このリストがどの原文に対するものか（変わったらリセット）
   var lastSource = "";            // 直近にマスキングした原文（候補の再計算に使う）
   var lastResolvedDetections = []; // 直近の確定済み検出範囲（候補が重複しないよう除外に使う）
+
+  // ---------- 保存（辞書・対応表を端末に24時間だけ保持） ----------
+  // 元の文章・マスク後の文章は保存対象外。辞書と対応表（トークン⇔元の値）のみ、
+  // 次回アクセス時に使えるよう端末のlocalStorageへ保存し、保存から24時間で自動的に破棄する。
+  var STORAGE_KEY = "sumigaiAI.state.v1";
+  var STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
+  var persistedSavedAt = null;
+
+  function persistState(){
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        savedAt: Date.now(), dict: dict, mapping: mapping, counters: counters
+      }));
+    } catch(e) { /* プライベートブラウジング等で保存できない場合は何もしない */ }
+  }
+
+  function clearPersistedState(){
+    try { localStorage.removeItem(STORAGE_KEY); } catch(e){}
+  }
+
+  function loadPersistedState(){
+    var raw;
+    try { raw = localStorage.getItem(STORAGE_KEY); } catch(e){ return; }
+    if (!raw) return;
+    var data;
+    try { data = JSON.parse(raw); } catch(e){ clearPersistedState(); return; }
+    if (!data || typeof data.savedAt !== "number") { clearPersistedState(); return; }
+    if (Date.now() - data.savedAt > STORAGE_TTL_MS) { clearPersistedState(); return; }
+    if (Array.isArray(data.dict)) dict = data.dict;
+    if (Array.isArray(data.mapping)) mapping = data.mapping;
+    if (data.counters && typeof data.counters === "object") counters = data.counters;
+    persistedSavedAt = data.savedAt;
+  }
+
+  function renderStorageStatus(){
+    var el = $("storageStatus");
+    if (!el) return;
+    if (!dict.length && !mapping.length) { el.textContent = ""; return; }
+    var savedAt = persistedSavedAt || Date.now();
+    var remainH = Math.max(1, Math.ceil((STORAGE_TTL_MS - (Date.now() - savedAt)) / 3600000));
+    el.textContent = "この端末に保存中（あと約" + remainH + "時間で自動削除）";
+  }
 
   // ---------- ユーティリティ ----------
   function $(id){ return document.getElementById(id); }
@@ -367,10 +413,11 @@
       var del = document.createElement("button");
       del.textContent = "×";
       del.setAttribute("aria-label", d.w + " を削除");
-      del.onclick = function(){ dict.splice(i,1); renderDict(); };
+      del.onclick = function(){ dict.splice(i,1); renderDict(); persistState(); };
       chip.appendChild(del);
       box.appendChild(chip);
     });
+    renderStorageStatus();
   }
 
   $("btnDictAdd").onclick = function(){
@@ -380,6 +427,7 @@
     dict.push({ w: w, c: $("dictCat").value });
     $("dictWord").value = "";
     renderDict();
+    persistState();
   };
   $("dictWord").addEventListener("keydown", function(e){
     if (e.key === "Enter") { e.preventDefault(); $("btnDictAdd").click(); }
@@ -403,8 +451,17 @@
                   return { w: d.w, c: c };
                 });
       renderDict();
+      persistState();
       toast("辞書を読み込みました（" + dict.length + "件）");
     } catch(e){ toast("JSONの形式が正しくありません"); }
+  };
+
+  $("btnClearStorage").onclick = function(){
+    dict = []; mapping = []; counters = {};
+    persistedSavedAt = null;
+    clearPersistedState();
+    renderDict();
+    toast("辞書・対応表を削除しました");
   };
 
   // ---------- マスキング基盤 ----------
@@ -796,6 +853,9 @@
     lastResolvedDetections = resolved;
     maskedRaw = applyDetections(source, resolved, true);
     renderResult();
+    persistedSavedAt = Date.now();
+    persistState();
+    renderStorageStatus();
   }
 
   $("btnMask").onclick = function(){
@@ -891,9 +951,25 @@
 "「来月から御社の軽バン2台を毎日チャーターしたいのですが、単価を2割下げていただけませんか。」";
     if (!dict.some(function(d){ return d.w === "山田太郎"; })) dict.push({ w:"山田太郎", c:"氏名" });
     renderDict();
+    persistState();
     document.querySelector("details.dict").open = true;
     toast("サンプルと氏名辞書1件をセットしました");
   };
+
+  // ---------- 初期化（保存データの復元） ----------
+  loadPersistedState();
+  renderDict();
+  if (dict.length) document.querySelector("details.dict").open = true;
+  if (mapping.length) {
+    renderResult();
+    $("maskedView").innerHTML = '<span style="color:var(--sub)">前回のマスク文はこの端末に保存されていません。対応表のみ復元しました。</span>';
+    $("countBadge").textContent = "✓ 対応表を復元しました（" + mapping.length + "件）";
+    $("cardResult").classList.remove("hidden");
+    $("cardRestore").classList.remove("hidden");
+    toast("前回の辞書・対応表を復元しました（保存から24時間で自動削除されます）");
+  } else if (dict.length) {
+    toast("前回の辞書を復元しました（保存から24時間で自動削除されます）");
+  }
 
 })();
 </script>
